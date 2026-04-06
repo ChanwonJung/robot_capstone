@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 
 import numpy as np
@@ -6,26 +7,29 @@ import omni.kit.app
 import omni.usd
 from isaacsim.core.utils.stage import open_stage
 from omni.kit.viewport.utility import get_active_viewport
-from pxr import Gf, Usd, UsdGeom
+from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
 
-SOURCE_STAGE = Path("/home/chanwonjung/Downloads/XR_Content_NVD@10010/Assets/XR/Stages/robot_capstone.usd")
-OUTPUT_STAGE = Path("/home/chanwonjung/Downloads/XR_Content_NVD@10010/Assets/XR/Stages/robot_capstone_hospital.usd")
+REPO_ROOT = Path(__file__).resolve().parent
+HOME_DIR = Path.home()
+DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", HOME_DIR / "Downloads")).expanduser()
+XR_CONTENT_ROOT = Path(
+    os.environ.get("ROBOT_CAPSTONE_XR_CONTENT_ROOT", DOWNLOADS_DIR / "XR_Content_NVD@10010")
+).expanduser()
+IMPORTED_ASSETS_DIR = REPO_ROOT / "assets" / "imported"
+ISAACSIM_ROOT = REPO_ROOT / "isaacsim"
 
-BEDSIDE_TABLE_ASSET = Path(
-    "/home/chanwonjung/Downloads/XR_Content_NVD@10010/Assets/XR/Stages/Indoor/Modern_House/SubUSDs/Roxana_RoundEndTable.usd"
-)
-APPLE_ASSET = Path("/home/chanwonjung/robot_capstone/assets/imported/Apple.usd")
+SOURCE_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone.usd"
+OUTPUT_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone_hospital.usd"
+
+BEDSIDE_TABLE_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "Roxana_RoundEndTable.usd"
+APPLE_ASSET = IMPORTED_ASSETS_DIR / "Apple.usd"
 USE_APPLE_MESH = True
 USE_GLASS_MESH = True
-RED_BALL_ASSET = Path("/home/chanwonjung/robot_capstone/assets/imported/Red_Ball.usd")
-BLUE_CUBE_ASSET = Path(
-    "/home/chanwonjung/robot_capstone/isaacsim/extscache/omni.warp.core-1.8.2+lx64/warp/examples/assets/cube.usd"
-)
-BOOK_ASSET = Path("/home/chanwonjung/robot_capstone/assets/imported/Book.usd")
-GLASS_ASSET = Path(
-    "/home/chanwonjung/Downloads/XR_Content_NVD@10010/Assets/XR/Stages/Indoor/Modern_House/SubUSDs/P_Glassware_Short.usd"
-)
+RED_BALL_ASSET = IMPORTED_ASSETS_DIR / "Red_Ball.usd"
+BLUE_CUBE_ASSET = ISAACSIM_ROOT / "extscache" / "omni.warp.core-1.8.2+lx64" / "warp" / "examples" / "assets" / "cube.usd"
+BOOK_ASSET = IMPORTED_ASSETS_DIR / "Book.usd"
+GLASS_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "P_Glassware_Short.usd"
 BEDSIDE_TABLE_POSITION = np.array([3.3, -1.69, -0.73])
 BEDSIDE_TABLE_ROTATION_DEG = np.array([0.0, 0.0, 25.0])
 BEDSIDE_TABLE_SCALE = np.array([0.01, 0.01, 0.01])
@@ -99,9 +103,46 @@ def set_descendant_display_color(prim, rgb):
         set_display_color(child, rgb)
 
 
+def iter_collision_prims(root_prim):
+    supported = {"Mesh", "Cube", "Sphere", "Cylinder", "Capsule", "Cone"}
+    for prim in Usd.PrimRange(root_prim):
+        if prim.GetTypeName() in supported:
+            yield prim
+
+
+def apply_collision_to_hierarchy(root_prim, approximation="convexHull"):
+    UsdPhysics.CollisionAPI.Apply(root_prim)
+    for prim in iter_collision_prims(root_prim):
+        UsdPhysics.CollisionAPI.Apply(prim)
+        if prim.GetTypeName() == "Mesh":
+            mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
+            mesh_collision.CreateApproximationAttr().Set(approximation)
+        physx_collision = PhysxSchema.PhysxCollisionAPI.Apply(prim)
+        physx_collision.CreateContactOffsetAttr().Set(0.01)
+        physx_collision.CreateRestOffsetAttr().Set(0.0)
+
+
+def apply_rigid_body(root_prim, mass, approximation="convexHull"):
+    apply_collision_to_hierarchy(root_prim, approximation=approximation)
+    rigid_body = UsdPhysics.RigidBodyAPI.Apply(root_prim)
+    rigid_body.CreateRigidBodyEnabledAttr(True)
+    physx_rigid_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root_prim)
+    physx_rigid_body.CreateDisableGravityAttr(False)
+    physx_rigid_body.CreateAngularDampingAttr(0.2)
+    physx_rigid_body.CreateLinearDampingAttr(0.05)
+    mass_api = UsdPhysics.MassAPI.Apply(root_prim)
+    mass_api.CreateMassAttr(float(mass))
+
+
+def apply_static_collider(root_prim, approximation="convexHull"):
+    apply_collision_to_hierarchy(root_prim, approximation=approximation)
+
+
 def build_apple(stage, path):
     if USE_APPLE_MESH and APPLE_ASSET.exists():
-        return add_reference(stage, path, APPLE_ASSET, APPLE_TRANSLATE, APPLE_ROTATION_DEG, APPLE_SCALE)
+        prim = add_reference(stage, path, APPLE_ASSET, APPLE_TRANSLATE, APPLE_ROTATION_DEG, APPLE_SCALE)
+        apply_rigid_body(prim, mass=0.12, approximation="convexHull")
+        return prim
 
     root = define_xform(stage, path, translate=APPLE_TRANSLATE, rotate_xyz_deg=APPLE_ROTATION_DEG)
 
@@ -119,29 +160,36 @@ def build_apple(stage, path):
     leaf.CreateSizeAttr(1.0)
     set_xform(leaf.GetPrim(), translate=[0.02, 0.0, 0.07], rotate_xyz_deg=[0.0, 22.0, 35.0], scale=[0.018, 0.008, 0.004])
     set_display_color(leaf.GetPrim(), [0.18, 0.45, 0.12])
+    apply_rigid_body(root, mass=0.12, approximation="boundingSphere")
     return root
 
 
 def build_red_ball(stage, path):
     if RED_BALL_ASSET.exists():
-        return add_reference(stage, path, RED_BALL_ASSET, RED_BALL_TRANSLATE, RED_BALL_ROTATION_DEG, RED_BALL_SCALE)
+        prim = add_reference(stage, path, RED_BALL_ASSET, RED_BALL_TRANSLATE, RED_BALL_ROTATION_DEG, RED_BALL_SCALE)
+        apply_rigid_body(prim, mass=0.08, approximation="boundingSphere")
+        return prim
 
     ball = UsdGeom.Sphere.Define(stage, path)
     ball.CreateRadiusAttr(0.045)
     set_xform(ball.GetPrim(), translate=RED_BALL_TRANSLATE, rotate_xyz_deg=RED_BALL_ROTATION_DEG, scale=RED_BALL_SCALE)
     set_display_color(ball.GetPrim(), [0.90, 0.08, 0.08])
+    apply_rigid_body(ball.GetPrim(), mass=0.08, approximation="boundingSphere")
     return ball.GetPrim()
 
 
 def build_glass(stage, path):
     if USE_GLASS_MESH and GLASS_ASSET.exists():
-        return add_reference(stage, path, GLASS_ASSET, GLASS_TRANSLATE, GLASS_ROTATION_DEG, GLASS_SCALE)
+        prim = add_reference(stage, path, GLASS_ASSET, GLASS_TRANSLATE, GLASS_ROTATION_DEG, GLASS_SCALE)
+        apply_rigid_body(prim, mass=0.18, approximation="convexHull")
+        return prim
 
     glass = UsdGeom.Cylinder.Define(stage, path)
     glass.CreateRadiusAttr(0.04)
     glass.CreateHeightAttr(0.12)
     set_xform(glass.GetPrim(), translate=GLASS_TRANSLATE, rotate_xyz_deg=GLASS_ROTATION_DEG)
     set_display_color(glass.GetPrim(), [0.75, 0.85, 0.95])
+    apply_rigid_body(glass.GetPrim(), mass=0.18, approximation="convexHull")
     return glass.GetPrim()
 
 
@@ -149,13 +197,16 @@ def build_blue_cube(stage, path):
     if BLUE_CUBE_ASSET.exists():
         prim = add_reference(stage, path, BLUE_CUBE_ASSET, BLUE_CUBE_TRANSLATE, BLUE_CUBE_ROTATION_DEG, BLUE_CUBE_SCALE)
         set_descendant_display_color(prim, [0.08, 0.22, 0.90])
+        apply_rigid_body(prim, mass=0.2, approximation="boundingCube")
         return prim
     return None
 
 
 def build_book(stage, path):
     if BOOK_ASSET.exists():
-        return add_reference(stage, path, BOOK_ASSET, BOOK_TRANSLATE, BOOK_ROTATION_DEG, BOOK_SCALE)
+        prim = add_reference(stage, path, BOOK_ASSET, BOOK_TRANSLATE, BOOK_ROTATION_DEG, BOOK_SCALE)
+        apply_rigid_body(prim, mass=0.35, approximation="boundingCube")
+        return prim
 
     root = define_xform(stage, path, translate=BOOK_TRANSLATE, rotate_xyz_deg=BOOK_ROTATION_DEG)
 
@@ -168,6 +219,7 @@ def build_book(stage, path):
     pages.CreateSizeAttr(1.0)
     set_xform(pages.GetPrim(), translate=[0.0, 0.0, 0.005], scale=[0.118, 0.078, 0.009])
     set_display_color(pages.GetPrim(), [0.94, 0.93, 0.88])
+    apply_rigid_body(root, mass=0.35, approximation="boundingCube")
     return root
 
 
@@ -175,6 +227,8 @@ def build_tabletop_items(stage, root_path):
     if stage.GetPrimAtPath(root_path):
         stage.RemovePrim(root_path)
     props_root = define_xform(stage, root_path, translate=BEDSIDE_TABLE_POSITION, rotate_xyz_deg=BEDSIDE_TABLE_ROTATION_DEG)
+    table_prim = add_reference(stage, f"{props_root.GetPath()}/BedsideTable", BEDSIDE_TABLE_ASSET, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], BEDSIDE_TABLE_SCALE)
+    apply_static_collider(table_prim, approximation="convexHull")
     build_apple(stage, f"{props_root.GetPath()}/Apple")
     build_glass(stage, f"{props_root.GetPath()}/Glass")
     build_red_ball(stage, f"{props_root.GetPath()}/RedBall")

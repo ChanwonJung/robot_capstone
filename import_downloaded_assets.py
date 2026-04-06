@@ -3,23 +3,27 @@ from isaacsim import SimulationApp
 simulation_app = SimulationApp({"headless": True})
 
 import asyncio
+import os
 from pathlib import Path
 
 import omni.kit.asset_converter
 from isaacsim.core.utils.extensions import enable_extension
 
+REPO_ROOT = Path(__file__).resolve().parent
+HOME_DIR = Path.home()
+DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", HOME_DIR / "Downloads")).expanduser()
 
 INPUTS = {
-    "Phone": Path("/home/chanwonjung/Downloads/Phone.glb"),
-    "Water_Bottle": Path("/home/chanwonjung/Downloads/Water Bottle.glb"),
-    "Coffee_Cup": Path("/home/chanwonjung/Downloads/Coffee cup.glb"),
-    "Glass": Path("/home/chanwonjung/Downloads/ikea_glass.glb"),
-    "Apple": Path("/home/chanwonjung/Downloads/Apple.glb"),
-    "Red_Ball": Path("/home/chanwonjung/Downloads/red-ball.glb"),
-    "Blue_Cube": Path("/home/chanwonjung/Downloads/blue_cube.glb"),
-    "Book": Path("/home/chanwonjung/Downloads/book.glb"),
+    "Phone": DOWNLOADS_DIR / "Phone.glb",
+    "Water_Bottle": DOWNLOADS_DIR / "Water Bottle.glb",
+    "Coffee_Cup": DOWNLOADS_DIR / "Coffee cup.glb",
+    "Glass": DOWNLOADS_DIR / "ikea_glass.glb",
+    "Apple": DOWNLOADS_DIR / "Apple.glb",
+    "Red_Ball": DOWNLOADS_DIR / "red-ball.glb",
+    "Blue_Cube": DOWNLOADS_DIR / "blue_cube.glb",
+    "Book": DOWNLOADS_DIR / "book.glb",
 }
-OUTPUT_DIR = Path("/home/chanwonjung/robot_capstone/assets/imported")
+OUTPUT_DIR = REPO_ROOT / "assets" / "imported"
 
 
 async def convert(in_file: Path, out_file: Path):

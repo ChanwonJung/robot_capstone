@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /home/chanwonjung/robot_capstone/isaacsim
-./isaac-sim.sh --enable omni.activity.ui --exec "/home/chanwonjung/robot_capstone/setup_initial_scene.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/isaacsim"
+./isaac-sim.sh --enable omni.activity.ui --exec "${SCRIPT_DIR}/setup_initial_scene.py"
