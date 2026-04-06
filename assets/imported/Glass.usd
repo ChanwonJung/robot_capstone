@@ -1,0 +1,29 @@
+#usda 1.0
+(
+    defaultPrim = "Glass"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Glass" (
+    kind = "component"
+)
+{
+    def Xform "Normalize"
+    {
+        float3 xformOp:scale = (100, 100, 100)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+
+        def Xform "Center"
+        {
+            double3 xformOp:translate = (-0.002736932991864314, -0.08596417979825931, 0.001500703152360075)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Xform "Visual" (
+                prepend references = @/home/chanwonjung/robot_capstone/assets/imported/Glass_ikea_source.usd@
+            )
+            {
+            }
+        }
+    }
+}
