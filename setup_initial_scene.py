@@ -33,21 +33,30 @@ GLASS_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_
 BEDSIDE_TABLE_POSITION = np.array([3.3, -1.69, -0.73])
 BEDSIDE_TABLE_ROTATION_DEG = np.array([0.0, 0.0, 25.0])
 BEDSIDE_TABLE_SCALE = np.array([0.01, 0.01, 0.01])
-APPLE_TRANSLATE = np.array([-2.5, 3.08, 0.86])
+APPLE_TRANSLATE = np.array([-2.5, 3.08, 0.79])
 APPLE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
-GLASS_TRANSLATE = np.array([-2.3, 3.0, 0.7])
+APPLE_VISUAL_TRANSLATE = np.array([-4.691566, -83.639191, 65.429489])
+APPLE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 1.85])
+GLASS_TRANSLATE = np.array([-2.3, 3.0, 0.71])
 GLASS_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
-RED_BALL_TRANSLATE = np.array([-1.84, 2.80, 0.87])
+GLASS_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 4.5])
+RED_BALL_TRANSLATE = np.array([-1.84, 2.80, 0.88])
 RED_BALL_ROTATION_DEG = np.array([-90.0, 0.0, 0.0])
-BLUE_CUBE_TRANSLATE = np.array([-2.0, 3.2, 0.78])
+RED_BALL_VISUAL_TRANSLATE = np.array([2.981419, -1.258126, -0.150547])
+RED_BALL_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.02])
+BLUE_CUBE_TRANSLATE = np.array([-2.0, 3.2, 0.77])
 BLUE_CUBE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
+BLUE_CUBE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
 BOOK_TRANSLATE = np.array([-1.6, 3.0, 0.75])
 BOOK_ROTATION_DEG = np.array([0.0, 0.0, -68.0])
+BOOK_COLLIDER_TRANSLATE = np.array([0.0, -0.045, -0.045])
+TABLETOP_COLLIDER_TRANSLATE = np.array([-2.05, 3.0, 0.70])
 APPLE_SCALE = np.array([0.001, 0.001, 0.001])
 GLASS_SCALE = np.array([0.02, 0.02, 0.02])
 RED_BALL_SCALE = np.array([0.05, 0.05, 0.05])
 BLUE_CUBE_SCALE = np.array([0.05, 0.05, 0.05])
 BOOK_SCALE = np.array([0.25, 0.25, 0.25])
+TABLETOP_COLLIDER_SCALE = np.array([0.75, 0.5, 0.005])
 TOP_CAMERA_POSITION = np.array([0.0, 0.0, 4.8])
 TOP_CAMERA_ROTATION_DEG = np.array([0.0, 90.0, -90.0])
 END_EFFECTOR_CANDIDATES = ["panda_hand", "gripper_center", "tool0", "ee_link", "right_gripper", "panda_link6"]
@@ -90,6 +99,14 @@ def add_reference(stage, path, asset_path, translate=None, rotate_xyz_deg=None, 
     return prim
 
 
+def add_visual_reference(stage, path, asset_path, translate=None, rotate_xyz_deg=None, scale=None):
+    prim = stage.DefinePrim(path, "Xform")
+    prim.GetReferences().ClearReferences()
+    prim.GetReferences().AddReference(str(asset_path))
+    set_xform(prim, translate=translate, rotate_xyz_deg=rotate_xyz_deg, scale=scale)
+    return prim
+
+
 def set_display_color(prim, rgb):
     gprim = UsdGeom.Gprim(prim)
     if gprim:
@@ -111,14 +128,13 @@ def iter_collision_prims(root_prim):
 
 
 def apply_collision_to_hierarchy(root_prim, approximation="convexHull"):
-    UsdPhysics.CollisionAPI.Apply(root_prim)
     for prim in iter_collision_prims(root_prim):
         UsdPhysics.CollisionAPI.Apply(prim)
         if prim.GetTypeName() == "Mesh":
             mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
             mesh_collision.CreateApproximationAttr().Set(approximation)
         physx_collision = PhysxSchema.PhysxCollisionAPI.Apply(prim)
-        physx_collision.CreateContactOffsetAttr().Set(0.01)
+        physx_collision.CreateContactOffsetAttr().Set(0.0)
         physx_collision.CreateRestOffsetAttr().Set(0.0)
 
 
@@ -135,91 +151,201 @@ def apply_rigid_body(root_prim, mass, approximation="convexHull"):
 
 
 def apply_static_collider(root_prim, approximation="convexHull"):
-    apply_collision_to_hierarchy(root_prim, approximation=approximation)
+    for prim in iter_collision_prims(root_prim):
+        UsdPhysics.CollisionAPI.Apply(prim)
+        if prim.GetTypeName() == "Mesh":
+            mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
+            mesh_collision.CreateApproximationAttr().Set(approximation)
+
+
+def build_tabletop_collider(stage, path):
+    collider = UsdGeom.Cube.Define(stage, path)
+    collider.CreateSizeAttr(1.0)
+    prim = collider.GetPrim()
+    set_xform(prim, translate=TABLETOP_COLLIDER_TRANSLATE, scale=TABLETOP_COLLIDER_SCALE)
+    apply_static_collider(prim, approximation="boundingCube")
+    UsdGeom.Imageable(prim).MakeInvisible()
+    return prim
+
+
+def create_dynamic_body_root(stage, path, translate, mass):
+    root = define_xform(stage, path, translate=translate)
+    rigid_body = UsdPhysics.RigidBodyAPI.Apply(root)
+    rigid_body.CreateRigidBodyEnabledAttr(True)
+    rigid_body.CreateStartsAsleepAttr(True)
+    physx_rigid_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root)
+    physx_rigid_body.CreateDisableGravityAttr(False)
+    physx_rigid_body.CreateAngularDampingAttr(0.2)
+    physx_rigid_body.CreateLinearDampingAttr(0.05)
+    physx_rigid_body.CreateSleepThresholdAttr(0.0)
+    physx_rigid_body.CreateStabilizationThresholdAttr(0.0)
+    mass_api = UsdPhysics.MassAPI.Apply(root)
+    mass_api.CreateMassAttr(float(mass))
+    return root
+
+
+def build_box_collider(stage, path, size, translate=None, rotate_xyz_deg=None):
+    prim = UsdGeom.Cube.Define(stage, path).GetPrim()
+    UsdGeom.Cube(prim).CreateSizeAttr(1.0)
+    set_xform(prim, translate=translate, rotate_xyz_deg=rotate_xyz_deg, scale=size)
+    apply_static_collider(prim, approximation="boundingCube")
+    UsdGeom.Imageable(prim).MakeInvisible()
+    return prim
+
+
+def build_sphere_collider(stage, path, radius, translate=None):
+    prim = UsdGeom.Sphere.Define(stage, path).GetPrim()
+    UsdGeom.Sphere(prim).CreateRadiusAttr(float(radius))
+    set_xform(prim, translate=translate)
+    apply_static_collider(prim, approximation="boundingSphere")
+    UsdGeom.Imageable(prim).MakeInvisible()
+    return prim
+
+
+def build_cylinder_collider(stage, path, radius, height, translate=None, rotate_xyz_deg=None):
+    prim = UsdGeom.Cylinder.Define(stage, path).GetPrim()
+    cylinder = UsdGeom.Cylinder(prim)
+    cylinder.CreateRadiusAttr(float(radius))
+    cylinder.CreateHeightAttr(float(height))
+    set_xform(prim, translate=translate, rotate_xyz_deg=rotate_xyz_deg)
+    apply_static_collider(prim, approximation="convexHull")
+    UsdGeom.Imageable(prim).MakeInvisible()
+    return prim
 
 
 def build_apple(stage, path):
+    root = create_dynamic_body_root(stage, path, APPLE_TRANSLATE, mass=0.12)
     if USE_APPLE_MESH and APPLE_ASSET.exists():
-        prim = add_reference(stage, path, APPLE_ASSET, APPLE_TRANSLATE, APPLE_ROTATION_DEG, APPLE_SCALE)
-        apply_rigid_body(prim, mass=0.12, approximation="convexHull")
-        return prim
+        add_visual_reference(
+            stage,
+            f"{path}/Visual",
+            APPLE_ASSET,
+            translate=(APPLE_VISUAL_TRANSLATE * APPLE_SCALE).tolist(),
+            rotate_xyz_deg=APPLE_ROTATION_DEG,
+            scale=APPLE_SCALE,
+        )
+    else:
+        body = UsdGeom.Sphere.Define(stage, f"{path}/Visual/Body")
+        body.CreateRadiusAttr(0.055)
+        set_display_color(body.GetPrim(), [0.80, 0.10, 0.08])
 
-    root = define_xform(stage, path, translate=APPLE_TRANSLATE, rotate_xyz_deg=APPLE_ROTATION_DEG)
+        stem = UsdGeom.Cylinder.Define(stage, f"{path}/Visual/Stem")
+        stem.CreateRadiusAttr(0.006)
+        stem.CreateHeightAttr(0.045)
+        set_xform(stem.GetPrim(), translate=[0.0, 0.0, 0.065])
+        set_display_color(stem.GetPrim(), [0.35, 0.22, 0.08])
 
-    body = UsdGeom.Sphere.Define(stage, f"{path}/Body")
-    body.CreateRadiusAttr(0.055)
-    set_display_color(body.GetPrim(), [0.80, 0.10, 0.08])
-
-    stem = UsdGeom.Cylinder.Define(stage, f"{path}/Stem")
-    stem.CreateRadiusAttr(0.006)
-    stem.CreateHeightAttr(0.045)
-    set_xform(stem.GetPrim(), translate=[0.0, 0.0, 0.065])
-    set_display_color(stem.GetPrim(), [0.35, 0.22, 0.08])
-
-    leaf = UsdGeom.Cube.Define(stage, f"{path}/Leaf")
-    leaf.CreateSizeAttr(1.0)
-    set_xform(leaf.GetPrim(), translate=[0.02, 0.0, 0.07], rotate_xyz_deg=[0.0, 22.0, 35.0], scale=[0.018, 0.008, 0.004])
-    set_display_color(leaf.GetPrim(), [0.18, 0.45, 0.12])
-    apply_rigid_body(root, mass=0.12, approximation="boundingSphere")
+        leaf = UsdGeom.Cube.Define(stage, f"{path}/Visual/Leaf")
+        leaf.CreateSizeAttr(1.0)
+        set_xform(leaf.GetPrim(), translate=[0.02, 0.0, 0.07], rotate_xyz_deg=[0.0, 22.0, 35.0], scale=[0.018, 0.008, 0.004])
+        set_display_color(leaf.GetPrim(), [0.18, 0.45, 0.12])
+    build_sphere_collider(
+        stage,
+        f"{path}/Collider",
+        radius=float(77.5 * APPLE_SCALE[0]),
+        translate=(APPLE_COLLIDER_TRANSLATE * APPLE_SCALE).tolist(),
+    )
     return root
 
 
 def build_red_ball(stage, path):
+    root = create_dynamic_body_root(stage, path, RED_BALL_TRANSLATE, mass=0.08)
     if RED_BALL_ASSET.exists():
-        prim = add_reference(stage, path, RED_BALL_ASSET, RED_BALL_TRANSLATE, RED_BALL_ROTATION_DEG, RED_BALL_SCALE)
-        apply_rigid_body(prim, mass=0.08, approximation="boundingSphere")
-        return prim
-
-    ball = UsdGeom.Sphere.Define(stage, path)
-    ball.CreateRadiusAttr(0.045)
-    set_xform(ball.GetPrim(), translate=RED_BALL_TRANSLATE, rotate_xyz_deg=RED_BALL_ROTATION_DEG, scale=RED_BALL_SCALE)
-    set_display_color(ball.GetPrim(), [0.90, 0.08, 0.08])
-    apply_rigid_body(ball.GetPrim(), mass=0.08, approximation="boundingSphere")
-    return ball.GetPrim()
+        add_visual_reference(
+            stage,
+            f"{path}/Visual",
+            RED_BALL_ASSET,
+            translate=(RED_BALL_VISUAL_TRANSLATE * RED_BALL_SCALE).tolist(),
+            rotate_xyz_deg=RED_BALL_ROTATION_DEG,
+            scale=RED_BALL_SCALE,
+        )
+    else:
+        ball = UsdGeom.Sphere.Define(stage, f"{path}/Visual/Ball")
+        ball.CreateRadiusAttr(0.045)
+        set_display_color(ball.GetPrim(), [0.90, 0.08, 0.08])
+    build_sphere_collider(
+        stage,
+        f"{path}/Collider",
+        radius=float(1.93 * RED_BALL_SCALE[0]),
+        translate=(RED_BALL_COLLIDER_TRANSLATE * RED_BALL_SCALE).tolist(),
+    )
+    return root
 
 
 def build_glass(stage, path):
+    root = create_dynamic_body_root(stage, path, GLASS_TRANSLATE, mass=0.18)
     if USE_GLASS_MESH and GLASS_ASSET.exists():
-        prim = add_reference(stage, path, GLASS_ASSET, GLASS_TRANSLATE, GLASS_ROTATION_DEG, GLASS_SCALE)
-        apply_rigid_body(prim, mass=0.18, approximation="convexHull")
-        return prim
-
-    glass = UsdGeom.Cylinder.Define(stage, path)
-    glass.CreateRadiusAttr(0.04)
-    glass.CreateHeightAttr(0.12)
-    set_xform(glass.GetPrim(), translate=GLASS_TRANSLATE, rotate_xyz_deg=GLASS_ROTATION_DEG)
-    set_display_color(glass.GetPrim(), [0.75, 0.85, 0.95])
-    apply_rigid_body(glass.GetPrim(), mass=0.18, approximation="convexHull")
-    return glass.GetPrim()
+        add_visual_reference(
+            stage,
+            f"{path}/Visual",
+            GLASS_ASSET,
+            rotate_xyz_deg=GLASS_ROTATION_DEG,
+            scale=GLASS_SCALE,
+        )
+    else:
+        glass = UsdGeom.Cylinder.Define(stage, f"{path}/Visual/Glass")
+        glass.CreateRadiusAttr(0.04)
+        glass.CreateHeightAttr(0.12)
+        set_display_color(glass.GetPrim(), [0.75, 0.85, 0.95])
+    build_cylinder_collider(
+        stage,
+        f"{path}/Collider",
+        radius=float(3.8 * GLASS_SCALE[0]),
+        height=float(9.0 * GLASS_SCALE[2]),
+        translate=(GLASS_COLLIDER_TRANSLATE * GLASS_SCALE).tolist(),
+        rotate_xyz_deg=GLASS_ROTATION_DEG,
+    )
+    return root
 
 
 def build_blue_cube(stage, path):
+    root = create_dynamic_body_root(stage, path, BLUE_CUBE_TRANSLATE, mass=0.2)
     if BLUE_CUBE_ASSET.exists():
-        prim = add_reference(stage, path, BLUE_CUBE_ASSET, BLUE_CUBE_TRANSLATE, BLUE_CUBE_ROTATION_DEG, BLUE_CUBE_SCALE)
-        set_descendant_display_color(prim, [0.08, 0.22, 0.90])
-        apply_rigid_body(prim, mass=0.2, approximation="boundingCube")
-        return prim
-    return None
+        visual = add_visual_reference(
+            stage,
+            f"{path}/Visual",
+            BLUE_CUBE_ASSET,
+            rotate_xyz_deg=BLUE_CUBE_ROTATION_DEG,
+            scale=BLUE_CUBE_SCALE,
+        )
+        set_descendant_display_color(visual, [0.08, 0.22, 0.90])
+    build_box_collider(
+        stage,
+        f"{path}/Collider",
+        size=(np.array([2.0, 2.0, 2.0]) * BLUE_CUBE_SCALE).tolist(),
+        translate=(BLUE_CUBE_COLLIDER_TRANSLATE * BLUE_CUBE_SCALE).tolist(),
+        rotate_xyz_deg=BLUE_CUBE_ROTATION_DEG,
+    )
+    return root
 
 
 def build_book(stage, path):
+    root = create_dynamic_body_root(stage, path, BOOK_TRANSLATE, mass=0.35)
     if BOOK_ASSET.exists():
-        prim = add_reference(stage, path, BOOK_ASSET, BOOK_TRANSLATE, BOOK_ROTATION_DEG, BOOK_SCALE)
-        apply_rigid_body(prim, mass=0.35, approximation="boundingCube")
-        return prim
+        add_visual_reference(
+            stage,
+            f"{path}/Visual",
+            BOOK_ASSET,
+            rotate_xyz_deg=BOOK_ROTATION_DEG,
+            scale=BOOK_SCALE,
+        )
+    else:
+        cover = UsdGeom.Cube.Define(stage, f"{path}/Visual/Cover")
+        cover.CreateSizeAttr(1.0)
+        set_xform(cover.GetPrim(), scale=[0.13, 0.09, 0.012])
+        set_display_color(cover.GetPrim(), [0.14, 0.28, 0.62])
 
-    root = define_xform(stage, path, translate=BOOK_TRANSLATE, rotate_xyz_deg=BOOK_ROTATION_DEG)
-
-    cover = UsdGeom.Cube.Define(stage, f"{path}/Cover")
-    cover.CreateSizeAttr(1.0)
-    set_xform(cover.GetPrim(), scale=[0.13, 0.09, 0.012])
-    set_display_color(cover.GetPrim(), [0.14, 0.28, 0.62])
-
-    pages = UsdGeom.Cube.Define(stage, f"{path}/Pages")
-    pages.CreateSizeAttr(1.0)
-    set_xform(pages.GetPrim(), translate=[0.0, 0.0, 0.005], scale=[0.118, 0.078, 0.009])
-    set_display_color(pages.GetPrim(), [0.94, 0.93, 0.88])
-    apply_rigid_body(root, mass=0.35, approximation="boundingCube")
+        pages = UsdGeom.Cube.Define(stage, f"{path}/Visual/Pages")
+        pages.CreateSizeAttr(1.0)
+        set_xform(pages.GetPrim(), translate=[0.0, 0.0, 0.005], scale=[0.118, 0.078, 0.009])
+        set_display_color(pages.GetPrim(), [0.94, 0.93, 0.88])
+    build_box_collider(
+        stage,
+        f"{path}/Collider",
+        size=(np.array([0.73, 1.0, 0.09]) * BOOK_SCALE).tolist(),
+        translate=(BOOK_COLLIDER_TRANSLATE * BOOK_SCALE).tolist(),
+        rotate_xyz_deg=BOOK_ROTATION_DEG,
+    )
     return root
 
 
@@ -227,8 +353,6 @@ def build_tabletop_items(stage, root_path):
     if stage.GetPrimAtPath(root_path):
         stage.RemovePrim(root_path)
     props_root = define_xform(stage, root_path, translate=BEDSIDE_TABLE_POSITION, rotate_xyz_deg=BEDSIDE_TABLE_ROTATION_DEG)
-    table_prim = add_reference(stage, f"{props_root.GetPath()}/BedsideTable", BEDSIDE_TABLE_ASSET, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], BEDSIDE_TABLE_SCALE)
-    apply_static_collider(table_prim, approximation="convexHull")
     build_apple(stage, f"{props_root.GetPath()}/Apple")
     build_glass(stage, f"{props_root.GetPath()}/Glass")
     build_red_ball(stage, f"{props_root.GetPath()}/RedBall")
@@ -341,15 +465,9 @@ def apply_scene():
     if bed_prim and bed_prim.IsValid():
         bed_prim.SetActive(False)
     table_path = f"{additions_root.GetPath()}/BedsideTable"
-    if BEDSIDE_TABLE_ASSET.exists():
-        add_reference(
-            stage,
-            table_path,
-            BEDSIDE_TABLE_ASSET,
-            BEDSIDE_TABLE_POSITION,
-            BEDSIDE_TABLE_ROTATION_DEG,
-            BEDSIDE_TABLE_SCALE,
-        )
+    table_prim = stage.GetPrimAtPath(table_path)
+    if table_prim and table_prim.IsValid():
+        table_prim.SetActive(False)
     build_tabletop_items(stage, f"{additions_root.GetPath()}/TabletopItems")
     create_realsense_camera(stage)
     create_camera(stage, "/World/TopViewCamera", TOP_CAMERA_POSITION, TOP_CAMERA_ROTATION_DEG, 2.5)
