@@ -1,0 +1,29 @@
+#usda 1.0
+(
+    defaultPrim = "Book"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Book" (
+    kind = "component"
+)
+{
+    def Xform "RotateFlat"
+    {
+        float3 xformOp:rotateXYZ = (90, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+
+        def Xform "Center"
+        {
+            double3 xformOp:translate = (-0.405749985948205, 0, 0.04517500102519986)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Xform "Visual" (
+                prepend references = @/home/chanwonjung/robot_capstone/assets/imported/Book_source.usd@
+            )
+            {
+            }
+        }
+    }
+}

@@ -1,0 +1,187 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World" (
+    kind = "component"
+)
+{
+    quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+    float3 xformOp:scale = (1, 1, 1)
+    double3 xformOp:translate = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+    def Scope "Looks"
+    {
+        def Material "Scene___Root"
+        {
+            token outputs:mdl:displacement.connect = </World/Looks/Scene___Root/Scene___Root.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Scene___Root/Scene___Root.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Scene___Root/Scene___Root.outputs:out>
+
+            def Shader "Scene___Root"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @gltf/pbr.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "gltf_material"
+                float inputs:alpha_cutoff = 0 (
+                    customData = {
+                        float default = 0.5
+                        dictionary range = {
+                            float max = 1
+                            float min = 0
+                        }
+                    }
+                    displayGroup = "Opacity"
+                    displayName = "Alpha Cutoff"
+                )
+                int inputs:alpha_mode = 0 (
+                    customData = {
+                        int default = 0
+                        dictionary range = {
+                            int max = 2
+                            int min = 0
+                        }
+                    }
+                    displayGroup = "Opacity"
+                    displayName = "Alpha Mode"
+                    renderType = "gltf_alpha_mode"
+                    sdrMetadata = {
+                        string __SDR__enum_value = "opaque"
+                        string options = "opaque:0|mask:1|blend:2"
+                    }
+                )
+                float inputs:base_alpha = 1 (
+                    customData = {
+                        float default = 1
+                        dictionary range = {
+                            float max = 1
+                            float min = 0
+                        }
+                    }
+                    displayGroup = "Base Alpha"
+                    displayName = "Alpha Mode"
+                )
+                color3f inputs:base_color_factor = (0.108353265, 0.2625118, 0.5054544) (
+                    customData = {
+                        float3 default = (1, 1, 1)
+                        dictionary range = {
+                            float3 max = (1, 1, 1)
+                            float3 min = (0, 0, 0)
+                        }
+                    }
+                    displayGroup = "PBR Metallic Roughness"
+                    displayName = "Base color"
+                )
+                float inputs:emissive_strength = 10000 (
+                    customData = {
+                        float default = 1
+                    }
+                    displayGroup = "Emission"
+                    displayName = "Emission Intensity"
+                )
+                float inputs:metallic_factor = 0 (
+                    customData = {
+                        float default = 0
+                        dictionary range = {
+                            float max = 1
+                            float min = 0
+                        }
+                    }
+                    displayGroup = "Metallic Roughness"
+                    displayName = "Metallic Factor"
+                )
+                float inputs:roughness_factor = 0.6 (
+                    customData = {
+                        float default = 0
+                        dictionary range = {
+                            float max = 1
+                            float min = 0
+                        }
+                    }
+                    displayGroup = "Metallic Roughness"
+                    displayName = "Roughness Factor"
+                )
+                token outputs:out
+            }
+        }
+    }
+
+    def Xform "root"
+    {
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+        def Xform "GLTF_SceneRootNode"
+        {
+            quatf xformOp:orient = (0.70710677, 0.70710677, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+            def Xform "Sketchfab_model_0"
+            {
+                quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+                float3 xformOp:scale = (1, 1, 1)
+                double3 xformOp:translate = (0, 0, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                def Xform "dffe90575da14880acb7e9904a499fe3_obj_cleaner_materialmerger_gles_1"
+                {
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    float3 xformOp:scale = (1, 1, 1)
+                    double3 xformOp:translate = (48.656646728515625, -4.766477108001709, 48.86415100097656)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                    def Xform "Object_2_2"
+                    {
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (0, 0, 0)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                        def Xform "Object_3_3"
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0, 0, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                            def Xform "Object_7"
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                def Mesh "Object_0" (
+                                    prepend apiSchemas = ["MaterialBindingAPI"]
+                                )
+                                {
+                                    float3[] extent = [(0, 0, 0), (9.532951, 9.532954, 9.532951)]
+                                    int[] faceVertexCounts = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+                                    int[] faceVertexIndices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23]
+                                    rel material:binding = </World/Looks/Scene___Root>
+                                    normal3f[] normals = [(0, -1, 0), (0, -1, 0), (0, -1, 0), (0, -1, 0), (0, -1, 0), (0, -1, 0), (0, -0, 1), (0, -0, 1), (0, -0, 1), (0, -0, 1), (0, -0, 1), (0, -0, 1), (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, -0, -1), (0, -0, -1), (0, -0, -1), (0, -0, -1), (0, -0, -1), (0, -0, -1), (1, -0, 0), (1, -0, 0), (1, -0, 0), (1, -0, 0), (1, -0, 0), (1, -0, 0), (-1, -0, 0), (-1, -0, 0), (-1, -0, 0), (-1, -0, 0), (-1, -0, 0), (-1, -0, 0)] (
+                                        interpolation = "faceVarying"
+                                    )
+                                    point3f[] points = [(0, 0, 0), (9.532951, 0, 0), (9.532951, 0, 9.532951), (0, 0, 9.532951), (0, 0, 9.532951), (9.532951, 0, 9.532951), (9.532951, 9.532954, 9.532951), (0, 9.532954, 9.532951), (0, 9.532954, 9.532951), (9.532951, 9.532954, 9.532951), (9.532951, 9.532954, 0), (0, 9.532954, 0), (0, 9.532954, 0), (9.532951, 9.532954, 0), (9.532951, 0, 0), (0, 0, 0), (9.532951, 0, 0), (9.532951, 9.532954, 0), (9.532951, 9.532954, 9.532951), (9.532951, 0, 9.532951), (0, 9.532954, 0), (0, 0, 0), (0, 0, 9.532951), (0, 9.532954, 9.532951)]
+                                    texCoord2f[] primvars:st = [(0.375, 1), (0.625, 1), (0.625, 0.75), (0.375, 1), (0.625, 0.75), (0.375, 0.75), (0.375, 0.75), (0.625, 0.75), (0.625, 0.5), (0.375, 0.75), (0.625, 0.5), (0.375, 0.5), (0.375, 0.5), (0.625, 0.5), (0.625, 0.25), (0.375, 0.5), (0.625, 0.25), (0.375, 0.25), (0.375, 0.25), (0.625, 0.25), (0.625, 0), (0.375, 0.25), (0.625, 0), (0.375, 0), (0.625, 1), (0.875, 1), (0.875, 0.75), (0.625, 1), (0.875, 0.75), (0.625, 0.75), (0.125, 1), (0.375, 1), (0.375, 0.75), (0.125, 1), (0.375, 0.75), (0.125, 0.75)] (
+                                        interpolation = "faceVarying"
+                                    )
+                                    uniform token subdivisionScheme = "none"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
