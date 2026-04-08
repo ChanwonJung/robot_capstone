@@ -18,7 +18,7 @@ XR_CONTENT_ROOT = Path(
     os.environ.get("ROBOT_CAPSTONE_XR_CONTENT_ROOT", DOWNLOADS_DIR / "XR_Content_NVD@10010")
 ).expanduser()
 IMPORTED_ASSETS_DIR = REPO_ROOT / "assets" / "imported"
-ISAACSIM_ROOT = REPO_ROOT / "isaacsim"
+ISAACSIM_ROOT = REPO_ROOT / ".." / ".." / "isaacsim"
 
 SOURCE_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone.usd"
 OUTPUT_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone_scene.usd"

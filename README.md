@@ -35,27 +35,18 @@ Maintains a **>30 FPS** control loop for execution and safety.
 | **YOLO v11 Tracking** | Continuously tracks the target and monitors for dynamic hazards (e.g., human hands) |
 | **MoveIt Hybrid Planning** | Global planner for initial trajectory + local planner for real-time adjustments based on detected "danger factors" |
 
----
+```
+robot_capstone/
+├── sim/                  # Isaac Sim environment and scene setup
+│   ├── assets/           # USD assets converted from downloaded GLBs
+│   └── scenes/           # USD stage files loaded into Isaac Sim
+├── models/               # Model weights and configs
+│   ├── fast_brain/       # YOLO model for real-time tracking and hazard detection
+│   └── slow_brain/       # LLM + grounding models for parsing and visual grounding
+└── moveit/               # MoveIt 2 config and planning setup for the Franka arm
+```
 
-## 3. Perception & Kinematics
-
-The system utilizes synchronized **Top-View** and **End-Effector** RGB-D streams.
-
-Given a pixel coordinate $(u, v)$ with depth value $Z$, and camera intrinsics $(f_x, f_y, c_x, c_y)$, the 3D position in the camera frame is:
-
-$$x = \frac{(u - c_x) \cdot Z}{f_x}$$
-
-$$y = \frac{(v - c_y) \cdot Z}{f_y}$$
-
-$$z = Z$$
-
-The Euclidean distance $d$ to the target centroid is:
-
-$$d = \sqrt{\left(\frac{(u - c_x) \cdot Z}{f_x}\right)^2 + \left(\frac{(v - c_y) \cdot Z}{f_y}\right)^2 + Z^2}$$
-
----
-
-## 4. Distributed Hardware Configuration
+## 3. Distributed Hardware Configuration
 
 To ensure simulation stability, the system uses a distributed ROS 2 network over **Tailscale**:
 
@@ -67,7 +58,7 @@ To ensure simulation stability, the system uses a distributed ROS 2 network over
 
 ---
 
-## 5. Logic Implementation
+## 4. Logic Implementation
 
 The following snippet demonstrates the state transition from target identification to high-speed reflexive tracking:
 
@@ -97,7 +88,7 @@ def fast_brain_loop(self):
 
 ---
 
-## 6. Dependencies & External Models
+## 5. Dependencies & External Models
 
 | Dependency | Purpose |
 |---|---|
@@ -107,6 +98,10 @@ def fast_brain_loop(self):
 | [Grounded-Segment-Anything](https://github.com/IDEA-Research/Grounded-Segment-Anything) | Spatial grounding |
 | [YOLOv11](https://github.com/ultralytics/ultralytics) | Object detection & tracking |
 
+### Expected File Paths:
+
+assumes isaacsim is installed as a folder on ~/isaacsim
+assumes moveit is installed on ~~
 ---
 
 ## 7. Contributors
