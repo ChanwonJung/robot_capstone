@@ -20,7 +20,7 @@ def Xform "Book" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
 
             def Xform "Visual" (
-                prepend references = @/home/chanwonjung/robot_capstone/assets/imported/Book_source.usd@
+                prepend references = @./Book_source.usd@
             )
             {
             }
