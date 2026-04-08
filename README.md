@@ -99,6 +99,7 @@ def fast_brain_loop(self):
 | [YOLOv11](https://github.com/ultralytics/ultralytics) | Object detection & tracking |
 
 ### Expected File Paths:
+
 assumes isaacsim is installed as a folder on ~/isaacsim
 assumes moveit is installed on ~~
 ---
