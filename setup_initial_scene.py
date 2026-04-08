@@ -1,5 +1,4 @@
 import asyncio
-import os
 from pathlib import Path
 
 import numpy as np
@@ -11,25 +10,20 @@ from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-HOME_DIR = Path.home()
-DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", HOME_DIR / "Downloads")).expanduser()
-XR_CONTENT_ROOT = Path(
-    os.environ.get("ROBOT_CAPSTONE_XR_CONTENT_ROOT", DOWNLOADS_DIR / "XR_Content_NVD@10010")
-).expanduser()
 IMPORTED_ASSETS_DIR = REPO_ROOT / "assets" / "imported"
-ISAACSIM_ROOT = REPO_ROOT / "isaacsim"
+ISAACSIM_ROOT = REPO_ROOT / ".." / "isaacsim"
 
-SOURCE_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone.usd"
-OUTPUT_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone_scene.usd"
+SOURCE_STAGE = REPO_ROOT / "scenes" / "robot_capstone.usd"
+OUTPUT_STAGE = REPO_ROOT / "scenes" / "robot_capstone_scene.usd"
 
-BEDSIDE_TABLE_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "Roxana_RoundEndTable.usd"
+BEDSIDE_TABLE_ASSET = IMPORTED_ASSETS_DIR / "Roxana_RoundEndTable.usd"
 APPLE_ASSET = IMPORTED_ASSETS_DIR / "Apple.usd"
 USE_APPLE_MESH = True
 USE_GLASS_MESH = True
 RED_BALL_ASSET = IMPORTED_ASSETS_DIR / "Red_Ball.usd"
 BLUE_CUBE_ASSET = ISAACSIM_ROOT / "extscache" / "omni.warp.core-1.8.2+lx64" / "warp" / "examples" / "assets" / "cube.usd"
 BOOK_ASSET = IMPORTED_ASSETS_DIR / "Book.usd"
-GLASS_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "P_Glassware_Short.usd"
+GLASS_ASSET = IMPORTED_ASSETS_DIR / "P_Glassware_Short.usd"
 BEDSIDE_TABLE_POSITION = np.array([3.3, -1.69, -0.73])
 BEDSIDE_TABLE_ROTATION_DEG = np.array([0.0, 0.0, 25.0])
 BEDSIDE_TABLE_SCALE = np.array([0.01, 0.01, 0.01])

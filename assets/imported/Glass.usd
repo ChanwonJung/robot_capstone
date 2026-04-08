@@ -20,7 +20,7 @@ def Xform "Glass" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
 
             def Xform "Visual" (
-                prepend references = @/home/chanwonjung/robot_capstone/assets/imported/Glass_ikea_source.usd@
+                prepend references = @./Glass_ikea_source.usd@
             )
             {
             }
