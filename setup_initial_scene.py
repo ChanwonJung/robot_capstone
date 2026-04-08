@@ -20,7 +20,7 @@ IMPORTED_ASSETS_DIR = REPO_ROOT / "assets" / "imported"
 ISAACSIM_ROOT = REPO_ROOT / "isaacsim"
 
 SOURCE_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone.usd"
-OUTPUT_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone_hospital.usd"
+OUTPUT_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone_scene.usd"
 
 BEDSIDE_TABLE_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "Roxana_RoundEndTable.usd"
 APPLE_ASSET = IMPORTED_ASSETS_DIR / "Apple.usd"
