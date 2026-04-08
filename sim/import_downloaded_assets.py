@@ -12,11 +12,10 @@ from isaacsim.core.utils.extensions import enable_extension
 REPO_ROOT = Path(__file__).resolve().parent
 HOME_DIR = Path.home()
 DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", HOME_DIR / "Downloads")).expanduser()
+ISAACSIM_ROOT = REPO_ROOT / "isaacsim"
 
 INPUTS = {
-    "Phone": DOWNLOADS_DIR / "Phone.glb",
     "Water_Bottle": DOWNLOADS_DIR / "Water Bottle.glb",
-    "Coffee_Cup": DOWNLOADS_DIR / "Coffee cup.glb",
     "Glass": DOWNLOADS_DIR / "ikea_glass.glb",
     "Apple": DOWNLOADS_DIR / "Apple.glb",
     "Red_Ball": DOWNLOADS_DIR / "red-ball.glb",
