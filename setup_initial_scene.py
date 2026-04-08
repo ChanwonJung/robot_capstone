@@ -1,94 +1,91 @@
 import asyncio
+import os
 from pathlib import Path
 
 import numpy as np
 import omni.kit.app
 import omni.usd
+from isaacsim.sensors.camera import SingleViewDepthSensorAsset
 from isaacsim.core.utils.stage import open_stage
 from omni.kit.viewport.utility import get_active_viewport
+from omni.kit.viewport.window import ViewportWindow, get_viewport_window_instances
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
 
 REPO_ROOT = Path(__file__).resolve().parent
+DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", Path.home() / "Downloads")).expanduser()
+XR_CONTENT_ROOT = Path(
+    os.environ.get("ROBOT_CAPSTONE_XR_CONTENT_ROOT", DOWNLOADS_DIR / "XR_Content_NVD@10010")
+).expanduser()
 IMPORTED_ASSETS_DIR = REPO_ROOT / "assets" / "imported"
-ISAACSIM_ROOT = REPO_ROOT / ".." / "isaacsim"
+ISAACSIM_ROOT = REPO_ROOT / "isaacsim"
 
-SOURCE_STAGE = REPO_ROOT / "scenes" / "robot_capstone.usd"
-OUTPUT_STAGE = REPO_ROOT / "scenes" / "robot_capstone_scene.usd"
+SOURCE_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone.usd"
+OUTPUT_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone_scene.usd"
 
-BEDSIDE_TABLE_ASSET = IMPORTED_ASSETS_DIR / "Roxana_RoundEndTable.usd"
 APPLE_ASSET = IMPORTED_ASSETS_DIR / "Apple.usd"
 USE_APPLE_MESH = True
 USE_GLASS_MESH = True
 RED_BALL_ASSET = IMPORTED_ASSETS_DIR / "Red_Ball.usd"
 BLUE_CUBE_ASSET = ISAACSIM_ROOT / "extscache" / "omni.warp.core-1.8.2+lx64" / "warp" / "examples" / "assets" / "cube.usd"
 BOOK_ASSET = IMPORTED_ASSETS_DIR / "Book.usd"
-GLASS_ASSET = IMPORTED_ASSETS_DIR / "P_Glassware_Short.usd"
+GLASS_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "P_Glassware_Short.usd"
 BEDSIDE_TABLE_POSITION = np.array([3.3, -1.69, -0.73])
 BEDSIDE_TABLE_ROTATION_DEG = np.array([0.0, 0.0, 25.0])
-BEDSIDE_TABLE_SCALE = np.array([0.01, 0.01, 0.01])
-APPLE_TRANSLATE = np.array([-2.5, 3.08, 0.79])
-APPLE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
+APPLE_TRANSLATE = np.array([-2.5, 3.48, 0.66])
+APPLE_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
 APPLE_VISUAL_TRANSLATE = np.array([-4.691566, -83.639191, 65.429489])
 APPLE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 1.85])
-GLASS_TRANSLATE = np.array([-2.3, 3.0, 0.71])
+GLASS_TRANSLATE = np.array([-2.3, 3.4, 0.71])
 GLASS_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 GLASS_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 4.5])
-RED_BALL_TRANSLATE = np.array([-1.84, 2.80, 0.88])
+RED_BALL_TRANSLATE = np.array([-1.9, 3.20, 0.88])
 RED_BALL_ROTATION_DEG = np.array([-90.0, 0.0, 0.0])
 RED_BALL_VISUAL_TRANSLATE = np.array([2.981419, -1.258126, -0.150547])
 RED_BALL_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.02])
-BLUE_CUBE_TRANSLATE = np.array([-2.0, 3.2, 0.77])
+BLUE_CUBE_TRANSLATE = np.array([-2.0, 3.6, 0.77])
 BLUE_CUBE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 BLUE_CUBE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
-BOOK_TRANSLATE = np.array([-1.6, 3.0, 0.75])
-BOOK_ROTATION_DEG = np.array([0.0, 0.0, -68.0])
-BOOK_COLLIDER_TRANSLATE = np.array([0.0, -0.045, -0.045])
-TABLETOP_COLLIDER_TRANSLATE = np.array([-2.05, 3.0, 0.70])
+BOOK_TRANSLATE = np.array([-1.62, 3.36, 0.748])
+BOOK_ROTATION_DEG = np.array([90.0, 0.0, -68.0])
+BOOK_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
 APPLE_SCALE = np.array([0.001, 0.001, 0.001])
 GLASS_SCALE = np.array([0.02, 0.02, 0.02])
 RED_BALL_SCALE = np.array([0.05, 0.05, 0.05])
 BLUE_CUBE_SCALE = np.array([0.05, 0.05, 0.05])
 BOOK_SCALE = np.array([0.25, 0.25, 0.25])
-TABLETOP_COLLIDER_SCALE = np.array([0.75, 0.5, 0.005])
-TOP_CAMERA_POSITION = np.array([0.0, 0.0, 4.8])
-TOP_CAMERA_ROTATION_DEG = np.array([0.0, 90.0, -90.0])
-END_EFFECTOR_CANDIDATES = ["panda_hand", "gripper_center", "tool0", "ee_link", "right_gripper", "panda_link6"]
-CAMERA_MOUNT_CANDIDATES = ["camera_mount", "realsense", "camera"]
-REALSENSE_LOCAL_TRANSLATE = np.array([0.06, 0.0, 0.08])
-# The camera must move with the gripper during play, so it is attached under the
-# ee hierarchy. USD Camera optical axis is typically different from the Franka ee
-# forward axis, so apply a fixed local correction to align the camera view with
-# the gripper's forward direction.
-CAMERA_TO_EE_CORRECTION = Gf.Rotation(Gf.Vec3d(1.0, 0.0, 0.0), -90.0).GetQuat()
+TOP_CAMERA_POSITION = np.array([0.0, 0.0, 2.8])
+TOP_CAMERA_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
+TOP_CAMERA_FOCAL_LENGTH_MM = 4.0
+EE_CAMERA_PATH = "/Franka/panda_hand/EEViewCameraMount/CameraRig/CameraFrame/EEViewCamera"
+TOP_CAMERA_PATH = "/World/TopViewCamera"
+CAMERA_SENSOR_SCOPE = "/World/CameraSensors"
+EE_DEPTH_SCOPE = f"{CAMERA_SENSOR_SCOPE}/EEViewDepth"
+TOP_DEPTH_SCOPE = f"{CAMERA_SENSOR_SCOPE}/TopViewDepth"
+EE_VIEWPORT_NAME = "EE View"
+TOP_VIEWPORT_NAME = "Top View"
+EE_VIEWPORT_RESOLUTION = (640, 480)
+TOP_VIEWPORT_RESOLUTION = (640, 480)
+WRIST_MOUNT_CANDIDATES = ["panda_hand", "panda_link7", "panda_link6"]
+EE_MOUNT_FALLBACK_CANDIDATES = ["panda_hand", "gripper_center", "tool0", "ee_link", "right_gripper"]
+EE_CAMERA_MOUNT_TRANSLATE = np.array([0.000, 0.0, 0.030])
+EE_CAMERA_LOCAL_TRANSLATE = np.array([0.095, 0.0, -0.030])
+EE_CAMERA_LOCAL_ROTATION_DEG = np.array([-160.0, 0.0, 90.0])
 
 
-def set_xform(prim, translate=None, rotate_xyz_deg=None, scale=None, orient_quat=None):
+def set_xform(prim, translate=None, rotate_xyz_deg=None, scale=None):
     xformable = UsdGeom.Xformable(prim)
     ordered_ops = {op.GetOpName(): op for op in xformable.GetOrderedXformOps()}
     if translate is not None:
         (ordered_ops.get("xformOp:translate") or xformable.AddTranslateOp()).Set(Gf.Vec3d(*map(float, translate)))
-    if orient_quat is not None:
-        quatf = Gf.Quatf(float(orient_quat.GetReal()), Gf.Vec3f(*map(float, orient_quat.GetImaginary())))
-        (ordered_ops.get("xformOp:orient") or xformable.AddOrientOp()).Set(quatf)
     if rotate_xyz_deg is not None:
         (ordered_ops.get("xformOp:rotateXYZ") or xformable.AddRotateXYZOp()).Set(Gf.Vec3f(*map(float, rotate_xyz_deg)))
     if scale is not None:
         (ordered_ops.get("xformOp:scale") or xformable.AddScaleOp()).Set(Gf.Vec3f(*map(float, scale)))
 
 
-def define_xform(stage, path, translate=None, rotate_xyz_deg=None, scale=None, orient_quat=None):
+def define_xform(stage, path, translate=None, rotate_xyz_deg=None, scale=None):
     prim = UsdGeom.Xform.Define(stage, path).GetPrim()
-    set_xform(prim, translate=translate, rotate_xyz_deg=rotate_xyz_deg, scale=scale, orient_quat=orient_quat)
-    return prim
-
-
-def add_reference(stage, path, asset_path, translate=None, rotate_xyz_deg=None, scale=None):
-    if stage.GetPrimAtPath(path):
-        stage.RemovePrim(path)
-    prim = stage.DefinePrim(path, "Xform")
-    prim.GetReferences().ClearReferences()
-    prim.GetReferences().AddReference(str(asset_path))
     set_xform(prim, translate=translate, rotate_xyz_deg=rotate_xyz_deg, scale=scale)
     return prim
 
@@ -121,45 +118,12 @@ def iter_collision_prims(root_prim):
             yield prim
 
 
-def apply_collision_to_hierarchy(root_prim, approximation="convexHull"):
-    for prim in iter_collision_prims(root_prim):
-        UsdPhysics.CollisionAPI.Apply(prim)
-        if prim.GetTypeName() == "Mesh":
-            mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
-            mesh_collision.CreateApproximationAttr().Set(approximation)
-        physx_collision = PhysxSchema.PhysxCollisionAPI.Apply(prim)
-        physx_collision.CreateContactOffsetAttr().Set(0.0)
-        physx_collision.CreateRestOffsetAttr().Set(0.0)
-
-
-def apply_rigid_body(root_prim, mass, approximation="convexHull"):
-    apply_collision_to_hierarchy(root_prim, approximation=approximation)
-    rigid_body = UsdPhysics.RigidBodyAPI.Apply(root_prim)
-    rigid_body.CreateRigidBodyEnabledAttr(True)
-    physx_rigid_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root_prim)
-    physx_rigid_body.CreateDisableGravityAttr(False)
-    physx_rigid_body.CreateAngularDampingAttr(0.2)
-    physx_rigid_body.CreateLinearDampingAttr(0.05)
-    mass_api = UsdPhysics.MassAPI.Apply(root_prim)
-    mass_api.CreateMassAttr(float(mass))
-
-
 def apply_static_collider(root_prim, approximation="convexHull"):
     for prim in iter_collision_prims(root_prim):
         UsdPhysics.CollisionAPI.Apply(prim)
         if prim.GetTypeName() == "Mesh":
             mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
             mesh_collision.CreateApproximationAttr().Set(approximation)
-
-
-def build_tabletop_collider(stage, path):
-    collider = UsdGeom.Cube.Define(stage, path)
-    collider.CreateSizeAttr(1.0)
-    prim = collider.GetPrim()
-    set_xform(prim, translate=TABLETOP_COLLIDER_TRANSLATE, scale=TABLETOP_COLLIDER_SCALE)
-    apply_static_collider(prim, approximation="boundingCube")
-    UsdGeom.Imageable(prim).MakeInvisible()
-    return prim
 
 
 def create_dynamic_body_root(stage, path, translate, mass):
@@ -315,12 +279,16 @@ def build_blue_cube(stage, path):
 
 def build_book(stage, path):
     root = create_dynamic_body_root(stage, path, BOOK_TRANSLATE, mass=0.35)
+    set_xform(root, rotate_xyz_deg=BOOK_ROTATION_DEG)
+    physx_rigid_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root)
+    physx_rigid_body.CreateAngularDampingAttr(2.5)
+    physx_rigid_body.CreateLinearDampingAttr(0.3)
     if BOOK_ASSET.exists():
         add_visual_reference(
             stage,
             f"{path}/Visual",
             BOOK_ASSET,
-            rotate_xyz_deg=BOOK_ROTATION_DEG,
+            rotate_xyz_deg=[0.0, 0.0, 0.0],
             scale=BOOK_SCALE,
         )
     else:
@@ -338,7 +306,7 @@ def build_book(stage, path):
         f"{path}/Collider",
         size=(np.array([0.73, 1.0, 0.09]) * BOOK_SCALE).tolist(),
         translate=(BOOK_COLLIDER_TRANSLATE * BOOK_SCALE).tolist(),
-        rotate_xyz_deg=BOOK_ROTATION_DEG,
+        rotate_xyz_deg=[0.0, 0.0, 0.0],
     )
     return root
 
@@ -362,37 +330,33 @@ def find_franka_root(stage):
     return None
 
 
-def create_camera(stage, path, translate, rotate_xyz_deg=None, focal_length_mm=1.93, orient_quat=None):
+def find_descendant_by_candidates(root_prim, candidates):
+    if root_prim is None:
+        return None
+    candidate_names = {name.lower() for name in candidates}
+    for prim in Usd.PrimRange(root_prim):
+        if prim.GetName().lower() in candidate_names:
+            return prim
+    return None
+
+
+def create_camera(stage, path, translate, rotate_xyz_deg=None, focal_length_mm=1.93):
     camera = UsdGeom.Camera.Define(stage, path)
-    set_xform(camera.GetPrim(), translate=translate, rotate_xyz_deg=rotate_xyz_deg, orient_quat=orient_quat)
+    set_xform(camera.GetPrim(), translate=translate, rotate_xyz_deg=rotate_xyz_deg)
     camera.CreateFocalLengthAttr(float(focal_length_mm))
-    camera.CreateClippingRangeAttr(Gf.Vec2f(0.01, 1000.0))
+    camera.CreateClippingRangeAttr(Gf.Vec2f(0.02, 1000.0))
     camera.CreateHorizontalApertureAttr(3.84)
     camera.CreateVerticalApertureAttr(2.16)
     return camera.GetPrim()
 
 
-def get_mount_or_ee_prim(franka_root):
-    ee_prim = None
-    if franka_root is None:
-        return None
-
-    for prim in Usd.PrimRange(franka_root):
-        if prim.GetName().lower() in END_EFFECTOR_CANDIDATES:
-            ee_prim = prim
-            break
-
-    if ee_prim is None:
-        return None
-
-    for prim in Usd.PrimRange(ee_prim):
-        if prim.GetName().lower() in CAMERA_MOUNT_CANDIDATES and prim.GetTypeName() in ("Xform", ""):
-            return prim
-
-    return ee_prim
+def get_ee_mount_prim(franka_root):
+    return find_descendant_by_candidates(franka_root, WRIST_MOUNT_CANDIDATES) or find_descendant_by_candidates(
+        franka_root, EE_MOUNT_FALLBACK_CANDIDATES
+    )
 
 
-def deactivate_legacy_realsense(stage):
+def deactivate_legacy_ee_cameras(stage):
     legacy_paths = [
         "/Franka/panda_link6/camera_mount/Realsense/RSD455",
         "/Franka/panda_link6/realsense_d435",
@@ -405,27 +369,40 @@ def deactivate_legacy_realsense(stage):
             prim.SetActive(False)
 
 
-def create_realsense_camera(stage):
-    deactivate_legacy_realsense(stage)
+def create_ee_camera(stage):
+    deactivate_legacy_ee_cameras(stage)
     franka_root = find_franka_root(stage)
-    pose_source = get_mount_or_ee_prim(franka_root) if franka_root else None
+    pose_source = get_ee_mount_prim(franka_root) if franka_root else None
     if pose_source is None:
+        pose_source = stage.GetPrimAtPath("/Franka/panda_link7")
+    if pose_source is None or not pose_source.IsValid():
         pose_source = stage.GetPrimAtPath("/Franka/panda_link6")
 
     parent_path = str(pose_source.GetPath())
+    mount_path = f"{parent_path}/EEViewCameraMount"
+    if stage.GetPrimAtPath(mount_path):
+        stage.RemovePrim(mount_path)
     mount = define_xform(
         stage,
-        f"{parent_path}/EEViewCameraMount",
-        translate=REALSENSE_LOCAL_TRANSLATE,
-        orient_quat=CAMERA_TO_EE_CORRECTION,
+        mount_path,
+        translate=EE_CAMERA_MOUNT_TRANSLATE,
+    )
+    rig = define_xform(
+        stage,
+        f"{mount.GetPath()}/CameraRig",
+        rotate_xyz_deg=EE_CAMERA_LOCAL_ROTATION_DEG,
+    )
+    camera_frame = define_xform(
+        stage,
+        f"{rig.GetPath()}/CameraFrame",
+        translate=EE_CAMERA_LOCAL_TRANSLATE,
     )
 
     return create_camera(
         stage,
-        f"{mount.GetPath()}/EEViewCamera",
+        f"{camera_frame.GetPath()}/EEViewCamera",
         [0.0, 0.0, 0.0],
-        focal_length_mm=1.93,
-        orient_quat=Gf.Quatd(1.0, Gf.Vec3d(0.0, 0.0, 0.0)),
+        focal_length_mm=1.4,
     )
 
 
@@ -439,15 +416,65 @@ def force_perspective_view():
         pass
 
 
+def attach_depth_sensor_template(stage, camera_path, scope_path, baseline_mm=None):
+    if stage.GetPrimAtPath(scope_path):
+        stage.RemovePrim(scope_path)
+    stage.DefinePrim(scope_path, "Scope")
+    kwargs = {}
+    if baseline_mm is not None:
+        kwargs["omni:rtx:post:depthSensor:baselineMM"] = baseline_mm
+    try:
+        SingleViewDepthSensorAsset.add_template_render_product(
+            parent_prim_path=scope_path,
+            camera_prim_path=camera_path,
+            **kwargs,
+        )
+    except Exception:
+        pass
+
+
+def get_viewport_window_by_name(name):
+    for window in get_viewport_window_instances():
+        if getattr(window, "name", None) == name:
+            return window
+    return None
+
+
+def ensure_viewport_window(name, camera_path, resolution):
+    window = get_viewport_window_by_name(name)
+    if window is None:
+        window = ViewportWindow(name=name, width=resolution[0], height=resolution[1])
+    viewport_api = getattr(window, "viewport_api", None)
+    if viewport_api is not None:
+        try:
+            viewport_api.camera_path = camera_path
+        except Exception:
+            pass
+        try:
+            viewport_api.set_active_camera(camera_path)
+        except Exception:
+            pass
+        try:
+            viewport_api.set_texture_resolution(resolution)
+        except Exception:
+            pass
+    return window
+
+
+def bind_custom_viewports(ee_camera_path, top_camera_path):
+    ensure_viewport_window(EE_VIEWPORT_NAME, ee_camera_path, EE_VIEWPORT_RESOLUTION)
+    ensure_viewport_window(TOP_VIEWPORT_NAME, top_camera_path, TOP_VIEWPORT_RESOLUTION)
+
+
 def save_current_stage(stage):
     root_layer = stage.GetRootLayer()
     root_path = Path(root_layer.realPath or root_layer.identifier)
     target_path = OUTPUT_STAGE.resolve()
 
-    if root_path.resolve() == target_path:
-        if not root_layer.Save():
-            raise RuntimeError(f"Failed to save stage in place: {target_path}")
-    else:
+    if not root_layer.Save():
+        raise RuntimeError(f"Failed to save stage in place: {root_path}")
+
+    if root_path.resolve() != target_path:
         if not root_layer.Export(str(OUTPUT_STAGE)):
             raise RuntimeError(f"Failed to export stage: {OUTPUT_STAGE}")
 
@@ -463,9 +490,18 @@ def apply_scene():
     if table_prim and table_prim.IsValid():
         table_prim.SetActive(False)
     build_tabletop_items(stage, f"{additions_root.GetPath()}/TabletopItems")
-    create_realsense_camera(stage)
-    create_camera(stage, "/World/TopViewCamera", TOP_CAMERA_POSITION, TOP_CAMERA_ROTATION_DEG, 2.5)
+    ee_camera = create_ee_camera(stage)
+    top_camera = create_camera(
+        stage,
+        TOP_CAMERA_PATH,
+        TOP_CAMERA_POSITION,
+        TOP_CAMERA_ROTATION_DEG,
+        TOP_CAMERA_FOCAL_LENGTH_MM,
+    )
+    attach_depth_sensor_template(stage, str(ee_camera.GetPath()), EE_DEPTH_SCOPE, baseline_mm=42)
+    attach_depth_sensor_template(stage, str(top_camera.GetPath()), TOP_DEPTH_SCOPE)
     force_perspective_view()
+    bind_custom_viewports(str(ee_camera.GetPath()), str(top_camera.GetPath()))
 
 
 async def main():
@@ -481,6 +517,7 @@ async def main():
     for _ in range(60):
         await app.next_update_async()
     force_perspective_view()
+    bind_custom_viewports(EE_CAMERA_PATH, TOP_CAMERA_PATH)
     stage = omni.usd.get_context().get_stage()
     save_current_stage(stage)
     print(f"Saved: {OUTPUT_STAGE}")
