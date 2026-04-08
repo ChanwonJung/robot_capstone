@@ -11,7 +11,7 @@ from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
 REPO_ROOT = Path(__file__).resolve().parent
 IMPORTED_ASSETS_DIR = REPO_ROOT / "assets" / "imported"
-ISAACSIM_ROOT = REPO_ROOT / ".." / "isaacsim"
+ISAACSIM_ROOT = REPO_ROOT / ".." / ".." / "isaacsim"
 
 SOURCE_STAGE = REPO_ROOT / "scenes" / "robot_capstone.usd"
 OUTPUT_STAGE = REPO_ROOT / "scenes" / "robot_capstone_scene.usd"

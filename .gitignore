@@ -1,3 +1,103 @@
+# ---------- Python ----------
+# Bytecode and caches — regenerated on every run, never useful in history
 __pycache__/
-*.pyc
-isaacsim/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments — these live on each developer's machine, not in git
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging artifacts from pip/setuptools/poetry builds
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Test and type-checker caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------- ROS 2 ----------
+# colcon build outputs — these are generated from source, so they must not be tracked
+/build/
+/install/
+/log/
+
+# ---------- Isaac Sim ----------
+# Isaac Sim writes kit logs, shader caches, and user settings into these dirs.
+# They're huge, machine-specific, and regenerate on launch.
+.nvidia-omniverse/
+kit/logs/
+*.log
+
+# USD backup/autosave files that Isaac Sim drops next to scenes
+*.usd.bak
+*.usdc.bak
+*~
+
+# ---------- Model weights & large binaries ----------
+# Model checkpoints for YOLO, Qwen, Grounding SAM, etc.
+# These belong in a model registry or shared storage, not in git.
+# If you need versioning for them, use Git LFS or DVC instead.
+*.pt
+*.pth
+*.onnx
+*.engine
+*.safetensors
+*.bin
+*.ckpt
+models/downloaded/
+
+# Downloaded raw assets (the .glb files your import script pulls in).
+# The *imported* USDs in assets/imported/ are your actual tracked outputs,
+# so only ignore the raw download staging area.
+downloads/
+*.glb
+
+# ---------- Data & recordings ----------
+# ROS 2 bag files and sim recordings get large fast
+*.bag
+*.db3
+*.mcap
+rosbags/
+recordings/
+
+# Point clouds and captured depth frames from debugging sessions
+*.pcd
+*.ply
+captures/
+
+# ---------- Secrets & local config ----------
+# API keys, Tailscale auth tokens, FastAPI inference endpoints, etc.
+# Never commit these — use a .env.example as a template instead.
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+
+# ---------- Editor & OS junk ----------
+# VS Code: ignore personal settings but keep shared ones (extensions.json, launch.json)
+# if your team agrees on them. Adjust the "!" lines to taste.
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+
+.idea/
+*.swp
+*.swo
+
+# macOS, Windows, Linux cruft
+.DS_Store
+Thumbs.db
+desktop.ini
