@@ -1,0 +1,7 @@
+debug:
+  save_output: true
+  output_dir: "/tmp/gsam_output"
+
+inference:
+  default_prompt: "object"
+  image_topic: "/camera/image_raw"
