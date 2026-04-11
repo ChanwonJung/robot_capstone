@@ -32,6 +32,9 @@ htmlcov/
 /log/
 
 # ---------- Isaac Sim ----------
+# Local Isaac Sim installation checked out/extracted inside this repo
+isaacsim/
+
 # Isaac Sim writes kit logs, shader caches, and user settings into these dirs.
 # They're huge, machine-specific, and regenerate on launch.
 .nvidia-omniverse/
