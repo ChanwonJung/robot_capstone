@@ -35,15 +35,19 @@ Maintains a **>30 FPS** control loop for execution and safety.
 | **YOLO v11 Tracking** | Continuously tracks the target and monitors for dynamic hazards (e.g., human hands) |
 | **MoveIt Hybrid Planning** | Global planner for initial trajectory + local planner for real-time adjustments based on detected "danger factors" |
 
-```
+```text
 robot_capstone/
-├── sim/                  # Isaac Sim environment and scene setup
+├── sim/                  # Project-owned Isaac Sim scripts and scene setup entrypoints
 │   ├── assets/           # USD assets converted from downloaded GLBs
-│   └── scenes/           # USD stage files loaded into Isaac Sim
+│   ├── scenes/           # USD stage files synced into XR_Content before launch
+│   ├── run_capstone_scene.sh
+│   ├── run_import_assets.sh
+│   └── setup_initial_scene.py
+├── isaacsim/             # Local Isaac Sim installation used by the launch scripts
 ├── models/               # Model weights and configs
 │   ├── fast_brain/       # YOLO model for real-time tracking and hazard detection
 │   └── slow_brain/       # LLM + grounding models for parsing and visual grounding
-└── moveit/               # MoveIt 2 config and planning setup for the Franka arm
+└── ros_pkgs/             # ROS 2 packages and planning integration
 ```
 
 ## 3. Distributed Hardware Configuration
@@ -98,10 +102,24 @@ def fast_brain_loop(self):
 | [Grounded-Segment-Anything](https://github.com/IDEA-Research/Grounded-Segment-Anything) | Spatial grounding |
 | [YOLOv11](https://github.com/ultralytics/ultralytics) | Object detection & tracking |
 
-### Expected File Paths:
+### Expected File Paths
 
-assumes isaacsim is installed as a folder on ~/isaacsim
-assumes moveit is installed on ~~
+- Isaac Sim is expected at `robot_capstone/isaacsim`
+- Scene scripts are expected at `robot_capstone/sim`
+- Runtime stages are copied into `~/Downloads/XR_Content_NVD@10010/Assets/XR/Stages` unless `ROBOT_CAPSTONE_XR_CONTENT_ROOT` is set
+- Downloaded GLB assets are read from `~/Downloads` unless `ROBOT_CAPSTONE_DOWNLOADS_DIR` is set
+
+### Launch
+
+```bash
+./run_capstone_scene.sh
+```
+
+or equivalently:
+
+```bash
+./sim/run_capstone_scene.sh
+```
 ---
 
 ## 7. Contributors

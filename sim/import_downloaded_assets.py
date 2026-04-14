@@ -9,10 +9,9 @@ from pathlib import Path
 import omni.kit.asset_converter
 from isaacsim.core.utils.extensions import enable_extension
 
-REPO_ROOT = Path(__file__).resolve().parent
+SIM_DIR = Path(__file__).resolve().parent
 HOME_DIR = Path.home()
 DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", HOME_DIR / "Downloads")).expanduser()
-ISAACSIM_ROOT = REPO_ROOT / "isaacsim"
 
 INPUTS = {
     "Water_Bottle": DOWNLOADS_DIR / "Water Bottle.glb",
@@ -22,7 +21,7 @@ INPUTS = {
     "Blue_Cube": DOWNLOADS_DIR / "blue_cube.glb",
     "Book": DOWNLOADS_DIR / "book.glb",
 }
-OUTPUT_DIR = REPO_ROOT / "assets" / "imported"
+OUTPUT_DIR = SIM_DIR / "assets" / "imported"
 
 
 async def convert(in_file: Path, out_file: Path):

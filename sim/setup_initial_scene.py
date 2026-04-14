@@ -4,7 +4,10 @@ from pathlib import Path
 
 import numpy as np
 import omni.kit.app
+import omni.timeline
+import omni.ui as ui
 import omni.usd
+from isaacsim.sensors.camera import Camera
 from isaacsim.sensors.camera import SingleViewDepthSensorAsset
 from isaacsim.core.utils.stage import open_stage
 from omni.kit.viewport.utility import get_active_viewport
@@ -12,13 +15,14 @@ from omni.kit.viewport.window import ViewportWindow, get_viewport_window_instanc
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
 
-REPO_ROOT = Path(__file__).resolve().parent
+SIM_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SIM_DIR.parent
 DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", Path.home() / "Downloads")).expanduser()
 XR_CONTENT_ROOT = Path(
     os.environ.get("ROBOT_CAPSTONE_XR_CONTENT_ROOT", DOWNLOADS_DIR / "XR_Content_NVD@10010")
 ).expanduser()
-IMPORTED_ASSETS_DIR = REPO_ROOT / "assets" / "imported"
-ISAACSIM_ROOT = REPO_ROOT / ".." / ".." / "isaacsim"
+IMPORTED_ASSETS_DIR = SIM_DIR / "assets" / "imported"
+ISAACSIM_ROOT = PROJECT_ROOT / "isaacsim"
 
 SOURCE_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone.usd"
 OUTPUT_STAGE = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "robot_capstone_scene.usd"
@@ -71,6 +75,15 @@ EE_MOUNT_FALLBACK_CANDIDATES = ["panda_hand", "gripper_center", "tool0", "ee_lin
 EE_CAMERA_MOUNT_TRANSLATE = np.array([0.000, 0.0, 0.030])
 EE_CAMERA_LOCAL_TRANSLATE = np.array([0.095, 0.0, -0.030])
 EE_CAMERA_LOCAL_ROTATION_DEG = np.array([-160.0, 0.0, 90.0])
+TABLETOP_OBJECT_PATHS = {
+    "Apple": "/World/CapstoneAdditions/TabletopItems/Apple",
+    "Glass": "/World/CapstoneAdditions/TabletopItems/Glass",
+    "RedBall": "/World/CapstoneAdditions/TabletopItems/RedBall",
+    "BlueCube": "/World/CapstoneAdditions/TabletopItems/BlueCube",
+    "Book": "/World/CapstoneAdditions/TabletopItems/Book",
+}
+
+DEPTH_OVERLAY = None
 
 
 def set_xform(prim, translate=None, rotate_xyz_deg=None, scale=None):
@@ -479,6 +492,111 @@ def save_current_stage(stage):
             raise RuntimeError(f"Failed to export stage: {OUTPUT_STAGE}")
 
 
+class TabletopDepthOverlay:
+    def __init__(self, stage):
+        self._stage = stage
+        self._timeline = omni.timeline.get_timeline_interface()
+        self._frame_counter = 0
+        self._labels = {}
+        self._window = None
+        self._update_subscription = None
+        self._ee_camera = None
+        self._top_camera = None
+        self._build_ui()
+        self._initialize_cameras()
+        self._update_subscription = (
+            omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(self._on_update)
+        )
+
+    def destroy(self):
+        self._update_subscription = None
+        self._ee_camera = None
+        self._top_camera = None
+        self._window = None
+        self._labels = {}
+
+    def _build_ui(self):
+        self._window = ui.Window("Tabletop Depth Monitor", width=360, height=230)
+        with self._window.frame:
+            with ui.VStack(spacing=6):
+                ui.Label("Depth updates while the simulation is playing.")
+                for name in TABLETOP_OBJECT_PATHS:
+                    label = ui.Label(f"{name}: top=-- m | ee=-- m")
+                    self._labels[name] = label
+
+    def _initialize_camera(self, prim_path, resolution, name):
+        camera = Camera(
+            prim_path=prim_path,
+            name=name,
+            resolution=resolution,
+        )
+        camera.initialize(attach_rgb_annotator=False)
+        camera.add_distance_to_camera_to_frame()
+        return camera
+
+    def _initialize_cameras(self):
+        self._ee_camera = self._initialize_camera(EE_CAMERA_PATH, EE_VIEWPORT_RESOLUTION, "ee_depth_monitor")
+        self._top_camera = self._initialize_camera(TOP_CAMERA_PATH, TOP_VIEWPORT_RESOLUTION, "top_depth_monitor")
+
+    def _get_world_position(self, prim_path):
+        prim = self._stage.GetPrimAtPath(prim_path)
+        if not prim or not prim.IsValid():
+            return None
+        transform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        translation = transform.ExtractTranslation()
+        return np.array([float(translation[0]), float(translation[1]), float(translation[2])], dtype=np.float32)
+
+    def _sample_depth_at_world_point(self, camera, world_position):
+        if world_position is None:
+            return None
+        frame = camera.get_current_frame()
+        depth = frame.get("distance_to_camera")
+        if depth is None:
+            return None
+        depth = np.asarray(depth)
+        if depth.ndim == 3 and depth.shape[-1] == 1:
+            depth = depth[:, :, 0]
+        if depth.ndim != 2:
+            return None
+
+        image_coords = camera.get_image_coords_from_world_points(np.asarray([world_position], dtype=np.float32))
+        if image_coords is None or len(image_coords) == 0:
+            return None
+        u, v = image_coords[0]
+        u = int(round(float(u)))
+        v = int(round(float(v)))
+        height, width = depth.shape
+        if u < 0 or v < 0 or u >= width or v >= height:
+            return None
+
+        value = float(depth[v, u])
+        if not np.isfinite(value) or value <= 0.0:
+            return None
+        return value
+
+    def _format_depth(self, value):
+        if value is None:
+            return "--"
+        return f"{value:.3f}"
+
+    def _update_labels(self):
+        for name, prim_path in TABLETOP_OBJECT_PATHS.items():
+            world_position = self._get_world_position(prim_path)
+            top_depth = self._sample_depth_at_world_point(self._top_camera, world_position)
+            ee_depth = self._sample_depth_at_world_point(self._ee_camera, world_position)
+            self._labels[name].text = (
+                f"{name}: top={self._format_depth(top_depth)} m | ee={self._format_depth(ee_depth)} m"
+            )
+
+    def _on_update(self, _event):
+        if not self._timeline.is_playing():
+            return
+        self._frame_counter += 1
+        if self._frame_counter % 3 != 0:
+            return
+        self._update_labels()
+
+
 def apply_scene():
     stage = omni.usd.get_context().get_stage()
     additions_root = define_xform(stage, "/World/CapstoneAdditions")
@@ -505,6 +623,7 @@ def apply_scene():
 
 
 async def main():
+    global DEPTH_OVERLAY
     app = omni.kit.app.get_app()
     for _ in range(180):
         await app.next_update_async()
@@ -520,6 +639,9 @@ async def main():
     bind_custom_viewports(EE_CAMERA_PATH, TOP_CAMERA_PATH)
     stage = omni.usd.get_context().get_stage()
     save_current_stage(stage)
+    if DEPTH_OVERLAY is not None:
+        DEPTH_OVERLAY.destroy()
+    DEPTH_OVERLAY = TabletopDepthOverlay(stage)
     print(f"Saved: {OUTPUT_STAGE}")
 
 
