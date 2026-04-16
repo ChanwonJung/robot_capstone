@@ -15,16 +15,6 @@ class GroundingDINORunner:
         device: str = "cpu",
     ):
         self.config_file = str(Path(config_file).expanduser())
-        # If the config path doesn't exist (e.g. after pip install instead of submodule),
-        # auto-detect from the installed groundingdino package.
-        if not Path(self.config_file).exists():
-            try:
-                import groundingdino as _gdino
-                self.config_file = str(
-                    Path(_gdino.__file__).parent / "config" / "GroundingDINO_SwinT_OGC.py"
-                )
-            except ImportError:
-                pass
         self.checkpoint = str(Path(checkpoint).expanduser())
         self.box_threshold = box_threshold
         self.text_threshold = text_threshold

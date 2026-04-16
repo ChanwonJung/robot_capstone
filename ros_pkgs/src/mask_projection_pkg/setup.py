@@ -10,7 +10,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/mask_projector.launch.py']),
+        ('share/' + package_name + '/launch', [
+            'launch/mask_projector.launch.py',
+            'launch/multi_view_projector.launch.py',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -21,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'mask_projector_node = mask_projection_pkg.projector_node:main',
+            'multi_view_projector_node = mask_projection_pkg.multi_view_projector_node:main',
         ],
     },
 )
