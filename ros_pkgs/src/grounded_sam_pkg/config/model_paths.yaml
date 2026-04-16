@@ -1,15 +1,11 @@
 grounding_dino:
-  # config_file: pip install 후 자동감지됨 (gdino_runner.py 참고).
-  # 직접 지정하려면: python -c "import groundingdino, os; print(os.path.dirname(groundingdino.__file__) + '/config/GroundingDINO_SwinT_OGC.py')"
-  config_file: ""
-  # 가중치 다운로드: https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
-  checkpoint: "~/robot_capstone/models/slow_brain/g-sam/groundingdino_swint_ogc.pth"
+  config_file: "/home/{username}/{workspace}/external/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+  checkpoint: "/home/{username}/{workspace}/models/groundingdino_swint_ogc.pth"
   box_threshold: 0.35
   text_threshold: 0.25
-  device: "cpu"  # GPU 사용 시 "cuda" 로 변경
+  device: "cpu"
 
 sam:
   model_type: "vit_h"
-  # 가중치 다운로드: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
-  checkpoint: "~/robot_capstone/models/slow_brain/g-sam/sam_vit_h_4b8939.pth"
-  device: "cpu"  # GPU 사용 시 "cuda" 로 변경
+  checkpoint: "/home/{username}/{workspace}/models/sam_vit_h_4b8939.pth"
+  device: "cpu"

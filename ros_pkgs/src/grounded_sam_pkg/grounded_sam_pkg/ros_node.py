@@ -42,7 +42,7 @@ from .postprocess import format_detections, format_masks, build_label_map
 from .prompt_adapter import PromptAdapter
 from .visualizer import draw_bboxes, draw_masks, save_result
 
-OUTPUT_DIR = Path.home() / "robot_capstone" / "output"
+OUTPUT_DIR = Path.home() / "gsam_ws" / "output"
 
 
 class GroundedSAMNode(Node):

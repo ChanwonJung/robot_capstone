@@ -59,7 +59,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from std_msgs.msg import String
 
-_OUTPUT_DIR = Path.home() / "robot_capstone" / "output"
+_OUTPUT_DIR = Path.home() / "gsam_ws" / "output"
 
 
 from .back_projection import depth_to_points
