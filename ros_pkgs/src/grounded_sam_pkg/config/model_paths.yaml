@@ -1,11 +1,11 @@
 grounding_dino:
-  config_file: "/home/{username}/{workspace}/external/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-  checkpoint: "/home/{username}/{workspace}/models/groundingdino_swint_ogc.pth"
+  config_file: ""       # 비워두면 pip 설치 경로 자동 감지
+  checkpoint: "~/robot_capstone/models/g-sam/groundingdino_swint_ogc.pth"
   box_threshold: 0.35
   text_threshold: 0.25
-  device: "cpu"
+  device: "cpu"         # GPU 사용 시 "cuda"
 
 sam:
   model_type: "vit_h"
-  checkpoint: "/home/{username}/{workspace}/models/sam_vit_h_4b8939.pth"
-  device: "cpu"
+  checkpoint: "~/robot_capstone/models/g-sam/sam_vit_h_4b8939.pth"
+  device: "cpu"         # GPU 사용 시 "cuda"
