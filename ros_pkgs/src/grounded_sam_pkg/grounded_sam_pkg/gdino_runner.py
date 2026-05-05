@@ -14,7 +14,16 @@ class GroundingDINORunner:
         text_threshold: float = 0.25,
         device: str = "cpu",
     ):
-        self.config_file = str(Path(config_file).expanduser())
+        raw_config_file = (config_file or "").strip()
+        self.config_file = str(Path(raw_config_file).expanduser()) if raw_config_file else ""
+        if not self.config_file or not Path(self.config_file).exists() or Path(self.config_file).is_dir():
+            try:
+                import groundingdino as _gdino
+                self.config_file = str(
+                    Path(_gdino.__file__).parent / "config" / "GroundingDINO_SwinT_OGC.py"
+                )
+            except ImportError:
+                pass
         self.checkpoint = str(Path(checkpoint).expanduser())
         self.box_threshold = box_threshold
         self.text_threshold = text_threshold
