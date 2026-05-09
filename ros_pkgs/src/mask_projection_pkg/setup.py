@@ -14,6 +14,9 @@ setup(
             'launch/mask_projector.launch.py',
             'launch/multi_view_projector.launch.py',
         ]),
+        ('share/' + package_name + '/config', [
+            'config/camera_extrinsics.yaml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

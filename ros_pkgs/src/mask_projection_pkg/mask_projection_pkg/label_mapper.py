@@ -1,28 +1,13 @@
 """
-label_mapper.py
-
 Maps mask pixel values → semantic categories → colors.
 
-Category assignment (2-object test mode, order-based):
-  mask pixel 1 → detections_json[0] → CATEGORY_TARGET    (e.g. cup)
-  mask pixel 2 → detections_json[1] → CATEGORY_WORKSPACE (e.g. table)
-  mask pixel 3+ → detections_json[2+] → CATEGORY_OBSTACLE (e.g. cone)
-  mask pixel 0  → CATEGORY_FREE (background / empty space)
+Category assignment (order-based, tied to GSAM prompt order):
+  mask pixel 0  → CATEGORY_FREE      (background)
+  mask pixel 1  → CATEGORY_TARGET    (detections_json[0])
+  mask pixel 2  → CATEGORY_WORKSPACE (detections_json[1])
+  mask pixel 3+ → CATEGORY_OBSTACLE  (detections_json[2+])
 
-All depth pixels are kept in the output — none are dropped.
-This makes /labeled_points a complete scene representation
-suitable for MoveIt or other planners.
-
-Color scheme (R, G, B):
-  TARGET    — yellow  (255, 220, 0)   high visibility
-  WORKSPACE — green   (0,   200, 80)  safe surface
-  OBSTACLE  — red     (220,  40, 40)  danger
-  FREE      — grey    (80,   80, 80)  unoccupied space
-
-Extending later (e.g. Qwen structured JSON with target_coordinate field):
-  → Replace / extend MASK_VALUE_TO_CATEGORY, or add a factory that
-    builds the mapping from Qwen's output before calling apply_labels().
-  → Everything downstream (cloud_builder, projector_node) is unaffected.
+All depth pixels are kept — background → FREE, detected → labeled.
 """
 from __future__ import annotations
 
@@ -33,10 +18,11 @@ import numpy as np
 
 
 # ── Category IDs ─────────────────────────────────────────────────────────────
-CATEGORY_FREE:      int = 0   # background / unoccupied space
+CATEGORY_FREE:      int = 0   # background / unoccupied space (EE view)
 CATEGORY_TARGET:    int = 1   # object to be moved
 CATEGORY_WORKSPACE: int = 2   # surface / operational area
 CATEGORY_OBSTACLE:  int = 3   # anything else detected → treat as obstacle
+CATEGORY_UNKNOWN:   int = 4   # top-view geometry (unclassified by GSAM)
 
 # ── Per-category color (R, G, B) ─────────────────────────────────────────────
 CATEGORY_COLOR: Dict[int, tuple] = {
@@ -44,6 +30,7 @@ CATEGORY_COLOR: Dict[int, tuple] = {
     CATEGORY_TARGET:    (  0, 200,  80),  # green
     CATEGORY_WORKSPACE: (255, 220,   0),  # yellow
     CATEGORY_OBSTACLE:  (220,  40,  40),  # red
+    CATEGORY_UNKNOWN:   (150,  80, 200),  # purple
 }
 
 # ── Mask pixel value → category ──────────────────────────────────────────────
@@ -54,6 +41,15 @@ MASK_VALUE_TO_CATEGORY: Dict[int, int] = {
     1: CATEGORY_TARGET,     # detections_json[0]
     2: CATEGORY_WORKSPACE,  # detections_json[1]
     # 3+ → OBSTACLE (handled by fallback in apply_labels)
+}
+
+# ── "category" string → category ID (Qwen / stub path) ───────────────────────
+# Used when detections carry an explicit "category" field (e.g. from qwen_stub).
+# Fallback to MASK_VALUE_TO_CATEGORY when field is absent (legacy path).
+_CATEGORY_STR_TO_ID: Dict[str, int] = {
+    "TARGET":    CATEGORY_TARGET,
+    "WORKSPACE": CATEGORY_WORKSPACE,
+    "OBSTACLE":  CATEGORY_OBSTACLE,
 }
 
 
@@ -102,12 +98,18 @@ def apply_labels(
                 categories = np.full(n, CATEGORY_FREE, dtype=np.uint8),
             ))
         else:
-            # look up category; anything not in the dict → OBSTACLE
-            category_id = MASK_VALUE_TO_CATEGORY.get(mv, CATEGORY_OBSTACLE)
-            color       = CATEGORY_COLOR[category_id]
-            det_idx     = mv - 1
-            label       = (detections[det_idx]["label"]
-                           if det_idx < len(detections) else f"obstacle_{mv}")
+            det_idx = mv - 1
+            det     = detections[det_idx] if det_idx < len(detections) else None
+
+            # Qwen/stub path: use explicit "category" field when present
+            # Legacy path: fall back to position-based MASK_VALUE_TO_CATEGORY
+            if det and "category" in det:
+                category_id = _CATEGORY_STR_TO_ID.get(det["category"], CATEGORY_OBSTACLE)
+            else:
+                category_id = MASK_VALUE_TO_CATEGORY.get(mv, CATEGORY_OBSTACLE)
+
+            color = CATEGORY_COLOR[category_id]
+            label = det["label"] if det else f"obstacle_{mv}"
 
             result.append(CategoryPoints(
                 label      = label,
