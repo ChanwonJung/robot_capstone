@@ -78,6 +78,22 @@ def generate_launch_description():
             'initials', default_value='',
             description='Prompt initials for output filenames, e.g. "tc" for "table, cup"',
         ),
+        DeclareLaunchArgument(
+            'min_project_interval_sec', default_value='2.0',
+            description='Minimum time gap between projection runs',
+        ),
+        DeclareLaunchArgument(
+            'save_ply', default_value='false',
+            description='Save original/labeled PLY files on each projection',
+        ),
+        DeclareLaunchArgument(
+            'max_ply_saves', default_value='3',
+            description='Maximum number of PLY save events; -1 for unlimited',
+        ),
+        DeclareLaunchArgument(
+            'output_subdir', default_value='',
+            description='Subdirectory under robot_capstone/output for saved PLY files',
+        ),
         # ── node ──────────────────────────────────────────────────────────────
         Node(
             package='mask_projection_pkg',
@@ -94,6 +110,10 @@ def generate_launch_description():
                 'min_depth':           LaunchConfiguration('min_depth'),
                 'max_depth':           LaunchConfiguration('max_depth'),
                 'initials':            LaunchConfiguration('initials'),
+                'min_project_interval_sec': LaunchConfiguration('min_project_interval_sec'),
+                'save_ply':            LaunchConfiguration('save_ply'),
+                'max_ply_saves':       LaunchConfiguration('max_ply_saves'),
+                'output_subdir':       LaunchConfiguration('output_subdir'),
             }],
             output='screen',
         ),

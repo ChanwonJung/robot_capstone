@@ -25,7 +25,15 @@ from .projection_engine import (
     project_unknown,
 )
 
-_OUTPUT_DIR = Path.home() / "gsam_ws" / "output"
+def _find_project_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "sim").exists() and (parent / "ros_pkgs").exists():
+            return parent
+    return Path.home() / "robot_capstone"
+
+
+_OUTPUT_DIR = _find_project_root() / "output"
 
 
 class MultiViewProjectorNode(Node):

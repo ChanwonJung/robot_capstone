@@ -69,7 +69,7 @@ mask pixel 값은 배열의 1-based 인덱스입니다 (`idx=0` → pixel=1).
 |---|---|---|
 | `image_topic` | `/ee_camera/image` | 구독할 RGB 이미지 토픽 |
 | `prompt` | `"object"` | 탐지할 물체 텍스트 프롬프트 (쉼표 구분) |
-| `model_config` | `config/model_paths.yaml` | 모델 경로 YAML |
+| `model_config` | launch 기본값 사용 | `model_paths.yaml` 경로 |
 
 ### 실행
 
@@ -125,38 +125,36 @@ ros2 run grounded_sam_pkg qwen_stub_node
 
 ---
 
-## 경로 설정 주의
-
-> `config/model_paths.yaml` 의 모델 경로와 `launch_env.bash` 의 `GSAM_WS` 환경변수는 본인 워크스페이스 경로에 맞게 수정하세요.
-
 ## 모델 설정 (config/model_paths.yaml)
+
+가중치를 `models/g-sam/` 아래에 두면 저장소 루트 기준 상대경로로 자동 해석됩니다.
 
 ```yaml
 grounding_dino:
-  config_file: "${GSAM_WS}/external/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-  checkpoint:  "${GSAM_WS}/models/groundingdino_swint_ogc.pth"
+  config_file: ""       # 비워두면 pip 설치 경로 자동 감지
+  checkpoint: "models/g-sam/groundingdino_swint_ogc.pth"
   box_threshold: 0.35
   text_threshold: 0.25
-  device: "cpu"   # GPU 사용 시 "cuda"
+  device: "cuda"
 
 sam:
   model_type: "vit_b"
-  checkpoint: "${GSAM_WS}/models/sam_vit_b_01ec64.pth"
-  device: "cpu"   # GPU 사용 시 "cuda"
+  checkpoint: "models/g-sam/sam_vit_b_01ec64.pth"
+  device: "cuda"
 ```
-
-`$GSAM_WS` 환경변수는 `launch_env.bash` 가 자동으로 설정합니다.
 
 ---
 
 ## 모델 가중치 다운로드
 
+저장소 루트에서 실행:
+
 ```bash
-mkdir -p models
+mkdir -p models/g-sam
 wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth \
-     -O models/groundingdino_swint_ogc.pth
+     -O models/g-sam/groundingdino_swint_ogc.pth
 wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
-     -O models/sam_vit_b_01ec64.pth
+     -O models/g-sam/sam_vit_b_01ec64.pth
 ```
 
 | 모델 | 파일 | 크기 |

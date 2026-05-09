@@ -13,6 +13,8 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/mask_projector.launch.py',
             'launch/multi_view_projector.launch.py',
+            'launch/isaac_grounded_projection.launch.py',
+            'launch/isaac_ee_grounded_projection.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/camera_extrinsics.yaml',
