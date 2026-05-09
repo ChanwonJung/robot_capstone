@@ -11,6 +11,7 @@ __pycache__/
 venv/
 env/
 ENV/
+gsam_venv/
 
 # Packaging artifacts from pip/setuptools/poetry builds
 dist/
@@ -30,6 +31,9 @@ htmlcov/
 /build/
 /install/
 /log/
+build/
+install/
+log/
 
 # ---------- Isaac Sim ----------
 # Local Isaac Sim installation checked out/extracted inside this repo
@@ -77,6 +81,7 @@ recordings/
 *.pcd
 *.ply
 captures/
+output/
 
 # ---------- Secrets & local config ----------
 # API keys, Tailscale auth tokens, FastAPI inference endpoints, etc.

@@ -49,6 +49,7 @@ with message_filters.ApproximateTimeSynchronizer across depth + mask.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -59,7 +60,15 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from std_msgs.msg import String
 
-_OUTPUT_DIR = Path.home() / "gsam_ws" / "output"
+def _find_project_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "sim").exists() and (parent / "ros_pkgs").exists():
+            return parent
+    return Path.home() / "robot_capstone"
+
+
+_OUTPUT_DIR = _find_project_root() / "output"
 
 
 from .back_projection import depth_to_points
@@ -88,6 +97,10 @@ class MaskProjectorNode(Node):
         # Depth filter range
         self.declare_parameter('min_depth', 0.05)
         self.declare_parameter('max_depth', 15.0)
+        self.declare_parameter('min_project_interval_sec', 2.0)
+        self.declare_parameter('save_ply', False)
+        self.declare_parameter('max_ply_saves', 3)
+        self.declare_parameter('output_subdir', '')
 
         depth_topic         = self.get_parameter('depth_topic').value
         camera_info_topic   = self.get_parameter('camera_info_topic').value
@@ -99,6 +112,13 @@ class MaskProjectorNode(Node):
         self._min_depth       = self.get_parameter('min_depth').value
         self._max_depth       = self.get_parameter('max_depth').value
         self._initials        = self.get_parameter('initials').value
+        self._min_project_interval_sec = float(self.get_parameter('min_project_interval_sec').value)
+        self._save_ply = bool(self.get_parameter('save_ply').value)
+        self._max_ply_saves = int(self.get_parameter('max_ply_saves').value)
+        output_subdir = str(self.get_parameter('output_subdir').value).strip().strip("/")
+        self._output_dir = _OUTPUT_DIR / output_subdir if output_subdir else _OUTPUT_DIR
+        self._last_project_time = 0.0
+        self._ply_save_count = 0
 
         # ── cache — updated by individual subscribers ─────────────────────────
         self._bridge             = CvBridge()
@@ -122,7 +142,11 @@ class MaskProjectorNode(Node):
         self.get_logger().info(
             f'MaskProjectorNode ready — '
             f'depth=[{self._min_depth}, {self._max_depth}]m  '
-            f'trigger={mask_topic}'
+            f'trigger={mask_topic}  '
+            f'min_project_interval_sec={self._min_project_interval_sec}  '
+            f'save_ply={self._save_ply}  '
+            f'max_ply_saves={self._max_ply_saves}  '
+            f'output_dir={self._output_dir}'
         )
 
     # ── cache callbacks ───────────────────────────────────────────────────────
@@ -142,12 +166,17 @@ class MaskProjectorNode(Node):
     # ── trigger callback ──────────────────────────────────────────────────────
 
     def _mask_cb(self, mask_msg: Image) -> None:
+        now = time.monotonic()
+        if now - self._last_project_time < self._min_project_interval_sec:
+            return
+
         if self._latest_depth is None or self._latest_info is None:
             self.get_logger().warn('Waiting for depth/camera_info...')
             return
         if self._latest_detections is None:
             self.get_logger().warn('Waiting for detections_json...')
             return
+        self._last_project_time = now
 
         # ── decode ────────────────────────────────────────────────────────────
         depth = self._bridge.imgmsg_to_cv2(self._latest_depth,
@@ -188,13 +217,18 @@ class MaskProjectorNode(Node):
         self._pub_result.publish(String(data=_build_result_json(category_points)))
 
         # ── save pointclouds to disk ──────────────────────────────────────────
-        stamp  = self._latest_depth.header.stamp.sec
-        prefix = f"{self._initials}_" if self._initials else ""
-        orig_name    = f"cloud_original_{prefix}{stamp}.ply"
-        labeled_name = f"cloud_labeled_{prefix}{stamp}.ply"
-        _save_ply_xyz(_OUTPUT_DIR / orig_name, points)
-        _save_ply_labeled(_OUTPUT_DIR / labeled_name, category_points)
-        self.get_logger().info(f"Saved → {orig_name}  {labeled_name}")
+        should_save_ply = self._save_ply and (
+            self._max_ply_saves < 0 or self._ply_save_count < self._max_ply_saves
+        )
+        if should_save_ply:
+            stamp  = self._latest_depth.header.stamp.sec
+            prefix = f"{self._initials}_" if self._initials else ""
+            orig_name    = f"cloud_original_{prefix}{stamp}.ply"
+            labeled_name = f"cloud_labeled_{prefix}{stamp}.ply"
+            _save_ply_xyz(self._output_dir / orig_name, points)
+            _save_ply_labeled(self._output_dir / labeled_name, category_points)
+            self._ply_save_count += 1
+            self.get_logger().info(f"Saved → {orig_name}  {labeled_name}")
 
 
 # ── helpers (module-level, easy to move/extend) ───────────────────────────────

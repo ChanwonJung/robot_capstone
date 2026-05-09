@@ -84,7 +84,7 @@ ros2 launch grounded_sam_pkg grounded_sam.launch.py \
 |---|---|---|
 | `prompt` | `"object"` | 탐지할 물체 (쉼표 구분) |
 | `image_topic` | `/camera/image_raw` | 구독할 RGB 이미지 토픽 |
-| `model_config` | (필수) | `model_paths.yaml` 절대경로 |
+| `model_config` | launch 기본값 사용 | `model_paths.yaml` 경로 |
 
 ### Isaac Sim 연동 시
 
@@ -98,20 +98,20 @@ ros2 launch grounded_sam_pkg grounded_sam.launch.py \
 
 ## 모델 설정 (`config/model_paths.yaml`)
 
-**clone 후 반드시 본인 경로에 맞게 수정하세요.**  
-`checkpoint` 경로만 수정하면 됩니다 (`config_file` 은 pip 설치 시 자동 감지).
+기본값은 저장소 루트 기준 상대경로입니다.  
+가중치를 `models/g-sam/` 아래에 두면 사용자별 홈 경로를 수정할 필요가 없습니다.
 
 ```yaml
 grounding_dino:
   config_file: ""       # 비워두면 pip 설치 경로 자동 감지
-  checkpoint: "~/robot_capstone/models/g-sam/groundingdino_swint_ogc.pth"
+  checkpoint: "models/g-sam/groundingdino_swint_ogc.pth"
   box_threshold: 0.35
   text_threshold: 0.25
   device: "cpu"         # GPU 사용 시 "cuda"
 
 sam:
   model_type: "vit_h"
-  checkpoint: "~/robot_capstone/models/g-sam/sam_vit_h_4b8939.pth"
+  checkpoint: "models/g-sam/sam_vit_h_4b8939.pth"
   device: "cpu"         # GPU 사용 시 "cuda"
 ```
 
