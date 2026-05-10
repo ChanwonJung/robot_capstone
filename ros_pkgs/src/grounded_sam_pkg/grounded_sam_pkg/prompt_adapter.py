@@ -1,12 +1,7 @@
 class PromptAdapter:
     """
-    Converts a user instruction into a GroundingDINO-compatible noun phrase.
-
-    GroundingDINO expects period-separated noun phrases, e.g.:
-        "bottle . cup . table"
-
-    Current implementation is rule-based (no LLM dependency).
-    Replace the adapt() body later if LLM-based nounization is needed.
+    쉼표 구분 입력 → GroundingDINO용 period-separated noun phrase 변환.
+    GroundingDINO는 "bottle . cup . table" 형식을 기대함.
     """
 
     def adapt(self, instruction: str) -> str:

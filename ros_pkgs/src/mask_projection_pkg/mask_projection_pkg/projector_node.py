@@ -51,7 +51,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import rclpy
@@ -73,7 +73,8 @@ _OUTPUT_DIR = _find_project_root() / "output"
 
 from .back_projection import depth_to_points
 from .cloud_builder import build_pointcloud2
-from .label_mapper import CategoryPoints, apply_labels, CATEGORY_TARGET, CATEGORY_WORKSPACE
+from .label_mapper import apply_labels
+from .ply_utils import build_result_json, save_ply_labeled, save_ply_xyz
 
 
 class MaskProjectorNode(Node):
@@ -124,7 +125,7 @@ class MaskProjectorNode(Node):
         self._bridge             = CvBridge()
         self._latest_depth:      Optional[Image]      = None
         self._latest_info:       Optional[CameraInfo] = None
-        self._latest_detections: Optional[List[Dict]] = None
+        self._latest_detections: Optional[List[dict]] = None
 
         # ── subscribers ───────────────────────────────────────────────────────
         # depth and camera_info: just cache the latest frame
@@ -214,97 +215,16 @@ class MaskProjectorNode(Node):
                 frame_id=self._output_frame_id,
             )
         self._pub_cloud.publish(build_pointcloud2(cloud_header, category_points))
-        self._pub_result.publish(String(data=_build_result_json(category_points)))
+        self._pub_result.publish(String(data=build_result_json(category_points)))
 
         # ── save pointclouds to disk ──────────────────────────────────────────
-        should_save_ply = self._save_ply and (
-            self._max_ply_saves < 0 or self._ply_save_count < self._max_ply_saves
-        )
-        if should_save_ply:
-            stamp  = self._latest_depth.header.stamp.sec
-            prefix = f"{self._initials}_" if self._initials else ""
-            orig_name    = f"cloud_original_{prefix}{stamp}.ply"
-            labeled_name = f"cloud_labeled_{prefix}{stamp}.ply"
-            _save_ply_xyz(self._output_dir / orig_name, points)
-            _save_ply_labeled(self._output_dir / labeled_name, category_points)
-            self._ply_save_count += 1
-            self.get_logger().info(f"Saved → {orig_name}  {labeled_name}")
-
-
-# ── helpers (module-level, easy to move/extend) ───────────────────────────────
-
-def _save_ply_xyz(path: Path, points: np.ndarray) -> None:
-    """Save (N, 3) float32 XYZ points as binary-little-endian PLY."""
-    N = len(points)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    header = (
-        "ply\nformat binary_little_endian 1.0\n"
-        f"element vertex {N}\n"
-        "property float x\nproperty float y\nproperty float z\n"
-        "end_header\n"
-    )
-    with open(path, 'wb') as f:
-        f.write(header.encode())
-        f.write(points.astype(np.float32).tobytes())
-
-
-def _save_ply_labeled(path: Path, category_points: List[CategoryPoints]) -> None:
-    """Save labeled points (XYZ + RGB + category) as binary-little-endian PLY."""
-    all_pts  = np.concatenate([cp.points     for cp in category_points], axis=0)
-    all_col  = np.concatenate([cp.colors     for cp in category_points], axis=0)
-    all_cats = np.concatenate([cp.categories for cp in category_points], axis=0)
-    N = len(all_pts)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    dt = np.dtype([
-        ('x', np.float32), ('y', np.float32), ('z', np.float32),
-        ('red', np.uint8), ('green', np.uint8), ('blue', np.uint8),
-        ('category', np.uint8),
-    ])
-    arr             = np.zeros(N, dtype=dt)
-    arr['x']        = all_pts[:, 0]
-    arr['y']        = all_pts[:, 1]
-    arr['z']        = all_pts[:, 2]
-    arr['red']      = all_col[:, 0]
-    arr['green']    = all_col[:, 1]
-    arr['blue']     = all_col[:, 2]
-    arr['category'] = all_cats
-    header = (
-        "ply\nformat binary_little_endian 1.0\n"
-        f"element vertex {N}\n"
-        "property float x\nproperty float y\nproperty float z\n"
-        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
-        "property uchar category\n"
-        "end_header\n"
-    )
-    with open(path, 'wb') as f:
-        f.write(header.encode())
-        f.write(arr.tobytes())
-
-
-def _build_result_json(category_points: List[CategoryPoints]) -> str:
-    """
-    Build a JSON summary with centroid + point count per category.
-
-    Output shape (extensible toward target_coordinate protocol):
-    {
-      "target":    {"label": "cup",   "centroid": [x, y, z], "point_count": N},
-      "workspace": {"label": "table", "centroid": [x, y, z], "point_count": N}
-    }
-    """
-    category_to_key = {
-        CATEGORY_TARGET:    'target',
-        CATEGORY_WORKSPACE: 'workspace',
-    }
-    out: Dict = {}
-    for cp in category_points:
-        key      = category_to_key.get(cp.category, f'category_{cp.category}')
-        centroid = cp.points.mean(axis=0).tolist()
-        out[key] = {
-            'label':       cp.label,
-            'centroid':    [round(v, 4) for v in centroid],
-            'point_count': len(cp.points),
-        }
-    return json.dumps(out)
+        stamp  = self._latest_depth.header.stamp.sec
+        prefix = f"{self._initials}_" if self._initials else ""
+        orig_name    = f"cloud_original_{prefix}{stamp}.ply"
+        labeled_name = f"cloud_labeled_{prefix}{stamp}.ply"
+        save_ply_xyz(_OUTPUT_DIR / orig_name, points)
+        save_ply_labeled(_OUTPUT_DIR / labeled_name, category_points)
+        self.get_logger().info(f"Saved → {orig_name}  {labeled_name}")
 
 
 def main(args=None) -> None:

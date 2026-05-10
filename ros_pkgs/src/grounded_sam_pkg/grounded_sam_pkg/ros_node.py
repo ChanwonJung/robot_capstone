@@ -1,27 +1,4 @@
-"""
-ROS2 node for GroundedSAMPipeline.
-
-Subscribes:
-  <image_topic>  (sensor_msgs/Image, default: /camera/image_raw)
-    — raw camera image
-
-Publishes:
-  /grounded_sam/annotated_image  (sensor_msgs/Image)
-    — BGR image with bbox + mask overlay (for visualization / rviz)
-
-  /grounded_sam/mask_image  (sensor_msgs/Image, 8UC1)
-    — label map: pixel value = detection index (1-based), 0 = background
-    — consumed by mask_projection_pkg for 2D→3D projection
-
-  /grounded_sam/detections_json  (std_msgs/String)
-    — JSON array: [{label, confidence, bbox_xyxy}, ...]
-    — used together with mask_image to know which index = which object
-
-Parameters:
-  model_config  (string) : path to model_paths.yaml  [required]
-  prompt        (string) : object noun phrase, e.g. "bottle, cup"  [default: "object"]
-  image_topic   (string) : topic to subscribe to  [default: /camera/image_raw]
-"""
+"""GroundedSAMNode — GSAM 추론 결과를 ROS 2 토픽으로 발행."""
 
 import json
 import time
@@ -43,7 +20,6 @@ from .postprocess import format_detections, format_masks, build_label_map
 from .prompt_adapter import PromptAdapter
 from .visualizer import draw_bboxes, draw_masks, save_result
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
 def _find_project_root() -> Path:
     current = Path(__file__).resolve()
     for parent in current.parents:
@@ -168,19 +144,14 @@ class GroundedSAMNode(Node):
             mask_list = []
             label_map = np.zeros(image_bgr.shape[:2], dtype=np.uint8)
 
-        # publish annotated image (BGR → bgr8)
         annotated_msg = self.bridge.cv2_to_imgmsg(vis, encoding="bgr8")
         annotated_msg.header = msg.header   # preserve source timestamp + frame_id
         self.pub_annotated.publish(annotated_msg)
 
-        # publish mask label map (8UC1, pixel = detection index 1-based)
-        # header is copied from the source image so that ApproximateTimeSynchronizer
-        # in mask_projection_pkg can match mask ↔ depth by timestamp
         mask_msg = self.bridge.cv2_to_imgmsg(label_map, encoding="mono8")
         mask_msg.header = msg.header        # ← key: same stamp as depth/camera_info
         self.pub_mask.publish(mask_msg)
 
-        # publish detections JSON
         msg_json = String()
         msg_json.data = json.dumps(det_list)
         self.pub_json.publish(msg_json)

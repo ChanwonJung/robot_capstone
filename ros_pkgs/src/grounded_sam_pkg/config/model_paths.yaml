@@ -6,6 +6,6 @@ grounding_dino:
   device: "cuda"
 
 sam:
-  model_type: "vit_h"
-  checkpoint: "models/g-sam/sam_vit_h_4b8939.pth"
+  model_type: "vit_b"
+  checkpoint: "models/g-sam/sam_vit_b_01ec64.pth"
   device: "cuda"

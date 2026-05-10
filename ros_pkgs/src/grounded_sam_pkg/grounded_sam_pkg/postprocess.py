@@ -22,6 +22,7 @@ def format_detections(detections, phrases: List[str]) -> List[Dict[str, Any]]:
     )
     for i, box in enumerate(detections.xyxy):
         results.append({
+            "idx": i,
             "bbox_xyxy": box.tolist(),
             "confidence": float(confidences[i]) if confidences[i] is not None else None,
             "label": phrases[i] if i < len(phrases) else "",
