@@ -1,0 +1,47 @@
+# camera_extrinsics.yaml
+#
+# Camera optical-frame → world-frame transforms for multi_view_projector_node.
+#
+# Convention:
+#   p_world = R @ p_cam + t
+#
+#   p_cam  : 3D point in ROS camera optical frame (back_projection.py output)
+#            optical frame convention: +Z forward (depth), +X right, +Y down
+#   R (3x3): rotation from camera optical frame to world frame
+#   t (3,) : camera optical centre position in world frame (metres)
+#
+# Gazebo assumption: camera sensor body frame has +X as look direction.
+# R below is computed as R_body_to_world * R_optical_to_body, where
+#   R_optical_to_body = [[0,0,1],[-1,0,0],[0,-1,0]]
+#
+# IMPORTANT: After changing camera pose in sensors_demo.sdf, recompute R/t here.
+# Verify by launching the demo and checking that /world_map clouds align in RViz.
+#
+# For Isaac Sim:
+#   Copy this file, fill in R/t from USD stage camera World Transform, then
+#   override at launch:
+#     ros2 launch mask_projection_pkg multi_view_projector.launch.py \
+#       extrinsics_config:=/path/to/camera_extrinsics_isaac.yaml
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+ee_camera:
+  # SDF pose: x=-1  y=2  z=1.8 | roll=0  pitch=0.360rad (~20.6°)  yaw=π
+  # Camera at (-1, 2, 1.8), optical axis points at cup centre (-3, 2, 1.047).
+  # R = [[0, sin(p), -cos(p)], [1, 0, 0], [0, -cos(p), -sin(p)]]  where p=0.360 rad
+  # sin(0.360)=0.352, cos(0.360)=0.936
+  t: [-1.0, 2.0, 1.8]
+  R:
+    - [ 0.0,  0.352, -0.936]   # world X  ←  cam optical axes
+    - [ 1.0,  0.0,    0.0  ]   # world Y
+    - [ 0.0, -0.936, -0.352]   # world Z
+
+top_camera:
+  # SDF pose: x=-3  y=2  z=3.5 | roll=0  pitch=π/2=1.5708rad  yaw=0
+  # Camera directly above table centre, pointing straight down.
+  # Table top at z≈0.992 (2× scale) → camera-to-surface distance ≈ 2.5 m.
+  t: [-3.0, 2.0, 3.5]
+  R:
+    - [ 0.0, -1.0,  0.0]       # world X  ←  cam optical axes
+    - [-1.0,  0.0,  0.0]       # world Y
+    - [ 0.0,  0.0, -1.0]       # world Z

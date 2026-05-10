@@ -16,6 +16,9 @@ setup(
             'launch/isaac_grounded_projection.launch.py',
             'launch/isaac_ee_grounded_projection.launch.py',
         ]),
+        ('share/' + package_name + '/config', [
+            'config/camera_extrinsics.yaml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

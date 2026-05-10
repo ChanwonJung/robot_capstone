@@ -38,12 +38,12 @@ def generate_launch_description():
         # ── upstream segmentation topics ──────────────────────────────────────
         DeclareLaunchArgument(
             'mask_topic',
-            default_value='/grounded_sam/mask_image',
+            default_value='/qwen/mask_image',
             description='Mask label map topic (sensor_msgs/Image, mono8, 1-based index)',
         ),
         DeclareLaunchArgument(
             'detections_topic',
-            default_value='/grounded_sam/detections_json',
+            default_value='/qwen/labeled_detections',
             description='Detection JSON topic (std_msgs/String)',
         ),
         # ── output topics ─────────────────────────────────────────────────────

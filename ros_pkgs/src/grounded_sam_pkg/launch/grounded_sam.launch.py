@@ -24,7 +24,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "image_topic",
-            default_value="/camera/image_raw",
+            default_value="/ee_camera/image",
             description="Image topic to subscribe to",
         ),
         DeclareLaunchArgument(
