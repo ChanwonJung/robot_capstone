@@ -24,5 +24,25 @@ if [[ -f "${SCENES_DIR}/robot_capstone_scene.usd" ]]; then
   cp "${SCENES_DIR}/robot_capstone_scene.usd" "${STAGES_DIR}/robot_capstone_scene.usd"
 fi
 
+# Isaac Sim 5.1 ships ROS 2 Jazzy Python 3.11 bindings internally.
+# If the shell already sourced /opt/ros/jazzy (Python 3.12 on Ubuntu 24.04),
+# the bridge tries to load incompatible rclpy binaries and startup breaks.
+unset AMENT_PREFIX_PATH
+unset CMAKE_PREFIX_PATH
+unset COLCON_PREFIX_PATH
+unset PYTHONPATH
+unset ROS_DISTRO
+unset ROS_PYTHON_VERSION
+unset ROS_VERSION
+unset RMW_IMPLEMENTATION
+
+if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+  CLEAN_LD_LIBRARY_PATH="$(
+    printf '%s' "${LD_LIBRARY_PATH}" | awk -v RS=: -v ORS=: '$0 !~ "^/opt/ros/" {print}'
+  )"
+  CLEAN_LD_LIBRARY_PATH="${CLEAN_LD_LIBRARY_PATH%:}"
+  export LD_LIBRARY_PATH="${CLEAN_LD_LIBRARY_PATH}"
+fi
+
 cd "${ISAACSIM_DIR}"
 ./isaac-sim.sh --enable omni.activity.ui --exec "${SCRIPT_DIR}/setup_initial_scene.py"

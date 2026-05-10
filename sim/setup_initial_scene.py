@@ -21,6 +21,7 @@ if str(SIM_DIR) not in sys.path:
     sys.path.insert(0, str(SIM_DIR))
 
 from isaac_ros_camera_bridge import build_ee_view_bridge, build_top_view_bridge
+from isaac_ros_joint_bridge import create_ros2_joint_graph
 
 PROJECT_ROOT = SIM_DIR.parent
 DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", Path.home() / "Downloads")).expanduser()
@@ -92,6 +93,7 @@ TABLETOP_OBJECT_PATHS = {
 DEPTH_OVERLAY = None
 TOP_VIEW_ROS_BRIDGE = None
 EE_VIEW_ROS_BRIDGE = None
+FRANKA_JOINT_ROS_BRIDGE = None
 
 
 def set_xform(prim, translate=None, rotate_xyz_deg=None, scale=None):
@@ -606,7 +608,7 @@ class TabletopDepthOverlay:
 
 
 def apply_scene():
-    global TOP_VIEW_ROS_BRIDGE, EE_VIEW_ROS_BRIDGE
+    global TOP_VIEW_ROS_BRIDGE, EE_VIEW_ROS_BRIDGE, FRANKA_JOINT_ROS_BRIDGE
     stage = omni.usd.get_context().get_stage()
     additions_root = define_xform(stage, "/World/CapstoneAdditions")
     bed_prim = stage.GetPrimAtPath(f"{additions_root.GetPath()}/HospitalBed")
@@ -631,6 +633,12 @@ def apply_scene():
     bind_custom_viewports(str(ee_camera.GetPath()), str(top_camera.GetPath()))
     EE_VIEW_ROS_BRIDGE = build_ee_view_bridge(str(ee_camera.GetPath()))
     TOP_VIEW_ROS_BRIDGE = build_top_view_bridge(str(top_camera.GetPath()))
+    FRANKA_JOINT_ROS_BRIDGE = create_ros2_joint_graph(
+        articulation_path="/Franka",
+        graph_path="/World/ROS/FrankaJointGraph",
+        joint_state_topic="/joint_states",
+        joint_command_topic="/joint_command",
+    )
 
 
 async def main():

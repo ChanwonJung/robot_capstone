@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
@@ -17,6 +18,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument("launch_grounded_sam", default_value="true"),
         DeclareLaunchArgument("prompt", default_value="apple, glass, book"),
         DeclareLaunchArgument("model_config", default_value=default_model_config),
         DeclareLaunchArgument("image_topic", default_value="/ee_camera/image_raw"),
@@ -39,6 +41,7 @@ def generate_launch_description():
         DeclareLaunchArgument("max_ply_saves", default_value="3"),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(grounded_sam_launch),
+            condition=IfCondition(LaunchConfiguration("launch_grounded_sam")),
             launch_arguments={
                 "model_config": LaunchConfiguration("model_config"),
                 "prompt": LaunchConfiguration("prompt"),

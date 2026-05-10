@@ -13,6 +13,7 @@ setup(
         ('share/' + package_name + '/config', ['config/model_paths.yaml', 'config/runtime.yaml']),
         ('share/' + package_name + '/launch', [
             'launch/grounded_sam.launch.py',
+            'launch/grounded_sam_ee.launch.py',
             'launch/test_inference.launch.py',
         ]),
     ],
