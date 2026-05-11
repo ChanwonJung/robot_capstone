@@ -14,6 +14,8 @@ def generate_launch_description():
             DeclareLaunchArgument("min_point_count", default_value="100"),
             DeclareLaunchArgument("grasp_z_offset", default_value="0.03"),
             DeclareLaunchArgument("pre_grasp_z_offset", default_value="0.12"),
+            DeclareLaunchArgument("min_z", default_value="-0.5"),
+            DeclareLaunchArgument("max_z", default_value="2.0"),
             Node(
                 package="target_pose_bridge_pkg",
                 executable="target_pose_bridge_node",
@@ -27,6 +29,8 @@ def generate_launch_description():
                         "min_point_count": LaunchConfiguration("min_point_count"),
                         "grasp_z_offset": LaunchConfiguration("grasp_z_offset"),
                         "pre_grasp_z_offset": LaunchConfiguration("pre_grasp_z_offset"),
+                        "min_z": LaunchConfiguration("min_z"),
+                        "max_z": LaunchConfiguration("max_z"),
                     }
                 ],
             ),

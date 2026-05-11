@@ -6,9 +6,6 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    projection_launch = PathJoinSubstitution(
-        [FindPackageShare("mask_projection_pkg"), "launch", "isaac_ee_grounded_projection.launch.py"]
-    )
     target_pose_launch = PathJoinSubstitution(
         [FindPackageShare("target_pose_bridge_pkg"), "launch", "target_pose_bridge.launch.py"]
     )
@@ -19,21 +16,9 @@ def generate_launch_description():
     return LaunchDescription(
         [
             IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(projection_launch),
-                launch_arguments={
-                    "launch_grounded_sam": "false",
-                    "mask_topic": "/grounded_sam/mask_image",
-                    "detections_topic": "/grounded_sam/detections_json",
-                    "output_result_topic": "/ee_view/projection_result",
-                    "output_cloud_topic": "/ee_view/labeled_points",
-                    "output_subdir": "ee_view",
-                    "initials": "gc",
-                }.items(),
-            ),
-            IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(target_pose_launch),
                 launch_arguments={
-                    "input_topic": "/ee_view/projection_result",
+                    "input_topic": "/world_map_result",
                     "pre_grasp_topic": "/pre_grasp_target_pose",
                     "grasp_topic": "/grasp_target_pose",
                     "world_frame": "world",

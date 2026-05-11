@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/grounded_sam.launch.py',
             'launch/grounded_sam_ee.launch.py',
+            'launch/grounded_sam_dual.launch.py',
             'launch/test_inference.launch.py',
         ]),
     ],

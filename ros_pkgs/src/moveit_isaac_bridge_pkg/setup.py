@@ -11,7 +11,10 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/config", ["config/moveit_controllers.yaml"]),
+        ("share/" + package_name + "/config", [
+            "config/moveit_controllers.yaml",
+            "config/moveit.rviz",
+        ]),
         ("share/" + package_name + "/launch", [
             "launch/joint_trajectory_bridge.launch.py",
             "launch/panda_isaac_moveit.launch.py",

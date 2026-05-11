@@ -57,6 +57,47 @@ def generate_launch_description():
             default_value="1.0",
             description="Minimum time gap between inference runs",
         ),
+        # Optional dual-view (Top) inputs/outputs. Leave top_image_topic empty
+        # for single-view (EE-only) mode.
+        DeclareLaunchArgument(
+            "top_image_topic",
+            default_value="",
+            description="Top camera image topic. Empty disables dual-view.",
+        ),
+        DeclareLaunchArgument(
+            "top_prompt",
+            default_value="",
+            description="Optional Top-view prompt. Empty reuses 'prompt'.",
+        ),
+        DeclareLaunchArgument(
+            "top_annotated_topic",
+            default_value="/top/grounded_sam/annotated_image",
+        ),
+        DeclareLaunchArgument(
+            "top_mask_topic",
+            default_value="/top/grounded_sam/mask_image",
+        ),
+        DeclareLaunchArgument(
+            "top_detections_topic",
+            default_value="/top/grounded_sam/detections_json",
+        ),
+        # Top depth gating — exclude pixels outside [top_min_depth, top_max_depth]
+        # from the Top RGB image before g-sam runs (e.g. to hide the robot arm).
+        DeclareLaunchArgument(
+            "top_depth_topic",
+            default_value="",
+            description="Top depth topic. Empty disables Top depth masking.",
+        ),
+        DeclareLaunchArgument(
+            "top_min_depth",
+            default_value="0.0",
+            description="Top depth lower bound in meters (inclusive).",
+        ),
+        DeclareLaunchArgument(
+            "top_max_depth",
+            default_value="100.0",
+            description="Top depth upper bound in meters (inclusive).",
+        ),
         Node(
             package="grounded_sam_pkg",
             executable="grounded_sam_node",
@@ -71,6 +112,14 @@ def generate_launch_description():
                 "output_subdir": LaunchConfiguration("output_subdir"),
                 "process_every_n_frames": LaunchConfiguration("process_every_n_frames"),
                 "min_process_interval_sec": LaunchConfiguration("min_process_interval_sec"),
+                "top_image_topic": LaunchConfiguration("top_image_topic"),
+                "top_prompt": LaunchConfiguration("top_prompt"),
+                "top_annotated_topic": LaunchConfiguration("top_annotated_topic"),
+                "top_mask_topic": LaunchConfiguration("top_mask_topic"),
+                "top_detections_topic": LaunchConfiguration("top_detections_topic"),
+                "top_depth_topic": LaunchConfiguration("top_depth_topic"),
+                "top_min_depth": LaunchConfiguration("top_min_depth"),
+                "top_max_depth": LaunchConfiguration("top_max_depth"),
             }],
             output="screen",
         ),

@@ -63,7 +63,7 @@ def generate_launch_description():
     )
 
     rviz_config = PathJoinSubstitution(
-        [FindPackageShare("moveit_resources_panda_moveit_config"), "launch", LaunchConfiguration("rviz_config")]
+        [FindPackageShare("moveit_isaac_bridge_pkg"), "config", LaunchConfiguration("rviz_config")]
     )
     rviz_node = Node(
         condition=IfCondition(LaunchConfiguration("start_rviz")),
