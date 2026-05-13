@@ -39,33 +39,33 @@ USE_APPLE_MESH = True
 USE_GLASS_MESH = True
 RED_BALL_ASSET = IMPORTED_ASSETS_DIR / "Red_Ball.usd"
 BLUE_CUBE_ASSET = ISAACSIM_ROOT / "extscache" / "omni.warp.core-1.8.2+lx64" / "warp" / "examples" / "assets" / "cube.usd"
-BOOK_ASSET = IMPORTED_ASSETS_DIR / "Book.usd"
+BOOK_ASSET = IMPORTED_ASSETS_DIR / "Book_brown.usd"
 GLASS_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "P_Glassware_Short.usd"
-BEDSIDE_TABLE_POSITION = np.array([3.3, -1.69, -0.73])
+BEDSIDE_TABLE_POSITION = np.array([3.3, -1.79, -0.73])
 BEDSIDE_TABLE_ROTATION_DEG = np.array([0.0, 0.0, 25.0])
-APPLE_TRANSLATE = np.array([-2.5, 3.48, 0.66])
+APPLE_TRANSLATE = np.array([-2.43, 3.18, 0.66])
 APPLE_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
 APPLE_VISUAL_TRANSLATE = np.array([-4.691566, -83.639191, 65.429489])
 APPLE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 1.85])
-GLASS_TRANSLATE = np.array([-2.3, 3.4, 0.71])
+GLASS_TRANSLATE = np.array([-2.23, 3.03, 0.71])
 GLASS_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 GLASS_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 4.5])
-RED_BALL_TRANSLATE = np.array([-1.9, 3.20, 0.88])
+RED_BALL_TRANSLATE = np.array([-1.98, 2.97, 0.88])
 RED_BALL_ROTATION_DEG = np.array([-90.0, 0.0, 0.0])
 RED_BALL_VISUAL_TRANSLATE = np.array([2.981419, -1.258126, -0.150547])
 RED_BALL_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.02])
-BLUE_CUBE_TRANSLATE = np.array([-2.0, 3.6, 0.77])
+BLUE_CUBE_TRANSLATE = np.array([-2.41, 3.00, 0.77])
 BLUE_CUBE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 BLUE_CUBE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
-BOOK_TRANSLATE = np.array([-1.62, 3.36, 0.748])
+BOOK_TRANSLATE = np.array([-2.11, 2.92, 0.748])
 BOOK_ROTATION_DEG = np.array([90.0, 0.0, -68.0])
 BOOK_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
 APPLE_SCALE = np.array([0.001, 0.001, 0.001])
 GLASS_SCALE = np.array([0.02, 0.02, 0.02])
 RED_BALL_SCALE = np.array([0.05, 0.05, 0.05])
 BLUE_CUBE_SCALE = np.array([0.05, 0.05, 0.05])
-BOOK_SCALE = np.array([0.25, 0.25, 0.25])
-TOP_CAMERA_POSITION = np.array([0.0, 0.0, 2.8])
+BOOK_SCALE = np.array([0.08, 0.08, 0.08])
+TOP_CAMERA_POSITION = np.array([0.0, 0.2, 2.0])
 TOP_CAMERA_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 TOP_CAMERA_FOCAL_LENGTH_MM = 4.0
 EE_CAMERA_PATH = "/Franka/panda_hand/EEViewCameraMount/CameraRig/CameraFrame/EEViewCamera"
@@ -327,7 +327,7 @@ def build_book(stage, path):
     build_box_collider(
         stage,
         f"{path}/Collider",
-        size=(np.array([0.73, 1.0, 0.09]) * BOOK_SCALE).tolist(),
+        size=(np.array([1.49, 0.38, 2.45]) * BOOK_SCALE).tolist(),
         translate=(BOOK_COLLIDER_TRANSLATE * BOOK_SCALE).tolist(),
         rotate_xyz_deg=[0.0, 0.0, 0.0],
     )
@@ -425,7 +425,7 @@ def create_ee_camera(stage):
         stage,
         f"{camera_frame.GetPath()}/EEViewCamera",
         [0.0, 0.0, 0.0],
-        focal_length_mm=1.4,
+        focal_length_mm=1.1,
     )
 
 
