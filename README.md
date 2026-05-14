@@ -32,7 +32,7 @@ Maintains a **>30 FPS** control loop for execution and safety.
 
 | Component | Role |
 |---|---|
-| **YOLO v11 Tracking** | Continuously tracks the target and monitors for dynamic hazards (e.g., human hands) |
+| **YOLO26 Segmentation** | Continuously tracks the target and monitors for dynamic hazards (e.g., human hands) |
 | **MoveIt Hybrid Planning** | Global planner for initial trajectory + local planner for real-time adjustments based on detected "danger factors" |
 
 ```text
@@ -62,37 +62,7 @@ To ensure simulation stability, the system uses a distributed ROS 2 network over
 
 ---
 
-## 4. Logic Implementation
-
-The following snippet demonstrates the state transition from target identification to high-speed reflexive tracking:
-
-```python
-def fast_brain_loop(self):
-    """
-    Main loop for reflexive tracking and dynamic obstacle avoidance.
-    Fuses Top-view and End-effector data for sub-centimeter precision.
-    """
-    while rclpy.ok():
-        # Get latest detections from YOLO
-        detections = self.yolo_node.get_latest_frame()
-
-        for item in detections:
-            # Map detection to 3D world coordinates via depth frame
-            point_3d = self.transform_to_world(item.centroid, self.depth_buffer)
-
-            if item.label == 'target':
-                # Update MoveIt Planning Scene
-                self.moveit.update_target(point_3d)
-            elif item.label in self.hazard_list:
-                # Inject dynamic collision object with buffer zone
-                self.moveit.add_dynamic_obstacle(point_3d, radius=0.15)
-
-        self.rate.sleep()
-```
-
----
-
-## 5. Dependencies & External Models
+## 4. Dependencies & External Models
 
 | Dependency | Purpose |
 |---|---|
@@ -100,7 +70,7 @@ def fast_brain_loop(self):
 | [MoveIt 2](https://moveit.ros.org/) | Motion planning |
 | [Qwen-VL](https://github.com/QwenLM/Qwen-VL) | Vision-Language foundation model |
 | [Grounded-Segment-Anything](https://github.com/IDEA-Research/Grounded-Segment-Anything) | Spatial grounding |
-| [YOLOv11](https://github.com/ultralytics/ultralytics) | Object detection & tracking |
+| [YOLO26 (Segmentation)](https://github.com/ultralytics/ultralytics) | Object detection & tracking |
 
 ### Expected File Paths
 
@@ -109,23 +79,72 @@ def fast_brain_loop(self):
 - Runtime stages are copied into `~/Downloads/XR_Content_NVD@10010/Assets/XR/Stages` unless `ROBOT_CAPSTONE_XR_CONTENT_ROOT` is set
 - Downloaded GLB assets are read from `~/Downloads` unless `ROBOT_CAPSTONE_DOWNLOADS_DIR` is set
 
-### Launch
-
-```bash
-./run_capstone_scene.sh
-```
-
-or equivalently:
-
-```bash
-./sim/run_capstone_scene.sh
-```
 ---
 
-## 7. Contributors
+## 5. How to Run — Slow Brain Motion Validation
+
+> Snapshot of the validated run sequence at the time of this commit. Update when the launch graph changes.
+
+### Prerequisites (one-time)
+
+- ROS 2 workspace built: `cd ros_pkgs && colcon build --symlink-install`
+- `gsam_venv` prepared at the repo root with Grounded-SAM dependencies (`torch`, `segment-anything`, etc.)
+- ROS 2 + workspace sourced in every terminal:
+  ```bash
+  source /opt/ros/jazzy/setup.bash
+  source ros_pkgs/install/setup.bash
+  ```
+- **After every rebuild of `grounded_sam_pkg`**, patch entry-script shebangs back to the venv Python (colcon resets them to system Python, which lacks `torch`):
+  ```bash
+  VENV_PY="$PWD/gsam_venv/bin/python"
+  for f in $(find ros_pkgs/install/grounded_sam_pkg/lib -maxdepth 3 -type f -executable); do
+    head -1 "$f" | grep -q "^#!/usr/bin/python3$" && \
+      sed -i "1s|^#!/usr/bin/python3$|#!${VENV_PY}|" "$f"
+  done
+  ```
+
+### Run sequence (each command in its own terminal)
+
+1. **Isaac Sim scene**
+   ```bash
+   ./sim/run_capstone_scene.sh
+   ```
+
+2. **Grounded-SAM dual-view perception** — must run inside `gsam_venv`
+   ```bash
+   source gsam_venv/bin/activate
+   ros2 launch grounded_sam_pkg grounded_sam_dual.launch.py
+   ```
+
+3. **Mask projection → labeled point cloud** (publishes `/world_map_result`)
+   ```bash
+   ros2 launch mask_projection_pkg multi_view_projector.launch.py
+   ```
+
+4. **Target pose bridge + MoveIt + RViz**
+   ```bash
+   ros2 launch moveit_isaac_bridge_pkg capstone_pick_pipeline.launch.py
+   ```
+
+5. **MoveIt executor** — subscribes to `/grasp_target_pose`, plans + executes Panda arm motion
+   ```bash
+   ros2 launch moveit_isaac_bridge_pkg target_pose_executor.launch.py
+   ```
+
+### Re-arm for the next command
+
+The executor latches after a successful motion (Slow Brain semantics: "1 command = 1 motion"). To accept a new target without restarting:
+
+```bash
+ros2 topic pub --once /target_pose_executor/reset std_msgs/msg/Empty "{}"
+```
+
+---
+
+## 6. Contributors
 
 | Name | Role |
 |---|---|
-| **Chanwon Jeong** | Perception Pipeline & VLM Integration |
+| **Chanwon Jeong** | ROS 2 Architecture & MoveIt Motion Planning |
 | **Sanghyun Park** | Simulation Environment & Sensor Fusion |
-| **Jaewon Heo** | ROS 2 Architecture & MoveIt Motion Planning |
+| **Jaewon Heo** | Perception Pipeline & VLM Integration |

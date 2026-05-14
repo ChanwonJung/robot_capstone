@@ -25,6 +25,10 @@ def generate_launch_description():
                     "min_point_count": "100",
                     "grasp_z_offset": "0.03",
                     "pre_grasp_z_offset": "0.12",
+                    # Disable centroid-stability dedup. Slow Brain semantics =
+                    # every fresh detection should publish; executor one_shot
+                    # handles "execute once per command".
+                    "republish_position_threshold": "0.0",
                 }.items(),
             ),
             IncludeLaunchDescription(
