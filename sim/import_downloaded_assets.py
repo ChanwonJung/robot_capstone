@@ -14,12 +14,9 @@ HOME_DIR = Path.home()
 DOWNLOADS_DIR = Path(os.environ.get("ROBOT_CAPSTONE_DOWNLOADS_DIR", HOME_DIR / "Downloads")).expanduser()
 
 INPUTS = {
-    "Water_Bottle": DOWNLOADS_DIR / "Water Bottle.glb",
-    "Glass": DOWNLOADS_DIR / "ikea_glass.glb",
     "Apple": DOWNLOADS_DIR / "Apple.glb",
     "Red_Ball": DOWNLOADS_DIR / "red-ball.glb",
-    "Blue_Cube": DOWNLOADS_DIR / "blue_cube.glb",
-    "Book": DOWNLOADS_DIR / "book.glb",
+    "Basket": DOWNLOADS_DIR / "minecart.glb",
 }
 OUTPUT_DIR = SIM_DIR / "assets" / "imported"
 

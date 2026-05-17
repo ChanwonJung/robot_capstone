@@ -15,7 +15,7 @@ def generate_launch_description():
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(grounded_sam_launch),
                 launch_arguments={
-                    "prompt": "glass cup, blue cube, book",
+                    "prompt": "glass cup",
                     "image_topic": "/ee_camera/image_raw",
                     "annotated_topic": "/grounded_sam/annotated_image",
                     "mask_topic": "/grounded_sam/mask_image",

@@ -38,8 +38,8 @@ APPLE_ASSET = IMPORTED_ASSETS_DIR / "Apple.usd"
 USE_APPLE_MESH = True
 USE_GLASS_MESH = True
 RED_BALL_ASSET = IMPORTED_ASSETS_DIR / "Red_Ball.usd"
-BLUE_CUBE_ASSET = ISAACSIM_ROOT / "extscache" / "omni.warp.core-1.8.2+lx64" / "warp" / "examples" / "assets" / "cube.usd"
 BOOK_ASSET = IMPORTED_ASSETS_DIR / "Book_brown.usd"
+BASKET_ASSET = IMPORTED_ASSETS_DIR / "Basket.usd"
 GLASS_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "P_Glassware_Short.usd"
 BEDSIDE_TABLE_POSITION = np.array([3.3, -1.79, -0.73])
 BEDSIDE_TABLE_ROTATION_DEG = np.array([0.0, 0.0, 25.0])
@@ -50,20 +50,19 @@ APPLE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 1.85])
 GLASS_TRANSLATE = np.array([-2.23, 3.03, 0.71])
 GLASS_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 GLASS_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 4.5])
-RED_BALL_TRANSLATE = np.array([-1.98, 2.97, 0.88])
+RED_BALL_TRANSLATE = np.array([-1.85, 2.97, 0.88])
 RED_BALL_ROTATION_DEG = np.array([-90.0, 0.0, 0.0])
 RED_BALL_VISUAL_TRANSLATE = np.array([2.981419, -1.258126, -0.150547])
 RED_BALL_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.02])
-BLUE_CUBE_TRANSLATE = np.array([-2.41, 3.00, 0.77])
-BLUE_CUBE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
-BLUE_CUBE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
-BOOK_TRANSLATE = np.array([-2.11, 2.92, 0.748])
-BOOK_ROTATION_DEG = np.array([90.0, 0.0, -68.0])
+BOOK_TRANSLATE = np.array([-2.11, 2.92, 0.8])
+BOOK_ROTATION_DEG = np.array([0.0, -90.0, -68.0])
 BOOK_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
+BASKET_TRANSLATE = np.array([-2.05, 2.30, 0.72])
+BASKET_ROTATION_DEG = np.array([90.0, 0.0, -25.0])
+BASKET_SCALE = np.array([0.17, 0.17, 0.17])
 APPLE_SCALE = np.array([0.001, 0.001, 0.001])
 GLASS_SCALE = np.array([0.02, 0.02, 0.02])
 RED_BALL_SCALE = np.array([0.05, 0.05, 0.05])
-BLUE_CUBE_SCALE = np.array([0.05, 0.05, 0.05])
 BOOK_SCALE = np.array([0.08, 0.08, 0.08])
 TOP_CAMERA_POSITION = np.array([0.0, 0.2, 2.0])
 TOP_CAMERA_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
@@ -86,8 +85,8 @@ TABLETOP_OBJECT_PATHS = {
     "Apple": "/World/CapstoneAdditions/TabletopItems/Apple",
     "Glass": "/World/CapstoneAdditions/TabletopItems/Glass",
     "RedBall": "/World/CapstoneAdditions/TabletopItems/RedBall",
-    "BlueCube": "/World/CapstoneAdditions/TabletopItems/BlueCube",
     "Book": "/World/CapstoneAdditions/TabletopItems/Book",
+    "Basket": "/World/CapstoneAdditions/TabletopItems/Basket",
 }
 
 DEPTH_OVERLAY = None
@@ -279,24 +278,20 @@ def build_glass(stage, path):
     return root
 
 
-def build_blue_cube(stage, path):
-    root = create_dynamic_body_root(stage, path, BLUE_CUBE_TRANSLATE, mass=0.2)
-    if BLUE_CUBE_ASSET.exists():
-        visual = add_visual_reference(
+def build_basket(stage, path):
+    root = define_xform(
+        stage,
+        path,
+        translate=BASKET_TRANSLATE,
+        rotate_xyz_deg=BASKET_ROTATION_DEG,
+    )
+    if BASKET_ASSET.exists():
+        add_visual_reference(
             stage,
             f"{path}/Visual",
-            BLUE_CUBE_ASSET,
-            rotate_xyz_deg=BLUE_CUBE_ROTATION_DEG,
-            scale=BLUE_CUBE_SCALE,
+            BASKET_ASSET,
+            scale=BASKET_SCALE,
         )
-        set_descendant_display_color(visual, [0.08, 0.22, 0.90])
-    build_box_collider(
-        stage,
-        f"{path}/Collider",
-        size=(np.array([2.0, 2.0, 2.0]) * BLUE_CUBE_SCALE).tolist(),
-        translate=(BLUE_CUBE_COLLIDER_TRANSLATE * BLUE_CUBE_SCALE).tolist(),
-        rotate_xyz_deg=BLUE_CUBE_ROTATION_DEG,
-    )
     return root
 
 
@@ -341,8 +336,8 @@ def build_tabletop_items(stage, root_path):
     build_apple(stage, f"{props_root.GetPath()}/Apple")
     build_glass(stage, f"{props_root.GetPath()}/Glass")
     build_red_ball(stage, f"{props_root.GetPath()}/RedBall")
-    build_blue_cube(stage, f"{props_root.GetPath()}/BlueCube")
     build_book(stage, f"{props_root.GetPath()}/Book")
+    build_basket(stage, f"{props_root.GetPath()}/Basket")
     return props_root
 
 

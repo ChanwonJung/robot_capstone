@@ -19,6 +19,7 @@ setup(
             "launch/joint_trajectory_bridge.launch.py",
             "launch/panda_isaac_moveit.launch.py",
             "launch/capstone_pick_pipeline.launch.py",
+            "launch/target_pose_executor.launch.py",
         ]),
     ],
     install_requires=["setuptools"],
@@ -30,6 +31,7 @@ setup(
     entry_points={
         "console_scripts": [
             "joint_trajectory_bridge_node = moveit_isaac_bridge_pkg.joint_trajectory_bridge_node:main",
+            "target_pose_executor_node = moveit_isaac_bridge_pkg.target_pose_executor_node:main",
         ],
     },
 )

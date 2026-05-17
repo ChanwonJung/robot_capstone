@@ -33,7 +33,7 @@ def generate_launch_description():
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(grounded_sam_launch),
                 launch_arguments={
-                    "prompt": "glass cup, blue cube, book",
+                    "prompt": "glass cup",
                     # EE view (primary trigger)
                     "image_topic": "/ee_camera/image_raw",
                     "annotated_topic": "/grounded_sam/annotated_image",
@@ -43,7 +43,7 @@ def generate_launch_description():
                     "top_image_topic": "/camera/image_raw",
                     # Multi-class noun list; table-as-X false positives filtered
                     # out downstream by max_bbox_area_ratio.
-                    "top_prompt": "glass cup, blue cube, book",
+                    "top_prompt": "glass cup",
                     "top_annotated_topic": "/top/grounded_sam/annotated_image",
                     "top_mask_topic": "/top/grounded_sam/mask_image",
                     "top_detections_topic": "/top/grounded_sam/detections_json",
