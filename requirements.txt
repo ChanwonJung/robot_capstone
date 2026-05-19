@@ -1,0 +1,23 @@
+# ── Deep learning (install with CUDA wheel first — see note below) ────────────
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+torch
+torchvision
+
+# ── Vision models (installed from GitHub) ────────────────────────────────────
+git+https://github.com/IDEA-Research/GroundingDINO.git
+git+https://github.com/facebookresearch/segment-anything.git
+
+# ── Computer vision ───────────────────────────────────────────────────────────
+supervision
+opencv-python-headless
+
+# ── LLM / VLM client ─────────────────────────────────────────────────────────
+openai
+pydantic
+
+# ── Numerics ──────────────────────────────────────────────────────────────────
+numpy
+scipy
+
+# ── Config ────────────────────────────────────────────────────────────────────
+pyyaml
