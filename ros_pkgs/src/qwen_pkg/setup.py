@@ -12,7 +12,6 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', [
             'launch/inst_input_qwen.launch.py',
-            'launch/TEMP_instruction_prompt.launch.py',
         ]),
     ],
     install_requires=['setuptools'],

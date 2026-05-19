@@ -3,8 +3,11 @@
 torch
 torchvision
 
-# ── Vision models (installed from GitHub) ────────────────────────────────────
-git+https://github.com/IDEA-Research/GroundingDINO.git
+# ── Vision models ────────────────────────────────────────────────────────────
+# GroundingDINO: install from local clone (patched for PyTorch 2.x compatibility)
+#   git clone https://github.com/IDEA-Research/GroundingDINO.git
+#   then apply the scalar_type() patch before installing
+./GroundingDINO
 git+https://github.com/facebookresearch/segment-anything.git
 
 # ── Computer vision ───────────────────────────────────────────────────────────
