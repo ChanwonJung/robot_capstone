@@ -112,7 +112,7 @@ def _build_grounding_result(raw: dict) -> GroundingResult:
         dest = RelationDest(
             type="relation",
             reference_id=ref_id,
-            relation=raw["dest_relation"],
+            relation=raw.get("dest_relation", "near"),
         )
 
     return GroundingResult(
