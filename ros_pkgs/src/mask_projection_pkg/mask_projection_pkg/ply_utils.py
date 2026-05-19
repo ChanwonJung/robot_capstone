@@ -7,7 +7,7 @@ from typing import Dict, List
 
 import numpy as np
 
-from .label_mapper import CATEGORY_TARGET, CATEGORY_WORKSPACE, CategoryPoints
+from .label_mapper import CATEGORY_TARGET, CATEGORY_DESTINATION, CategoryPoints
 
 
 def save_ply_xyz(path: Path, points: np.ndarray) -> None:
@@ -66,13 +66,13 @@ def build_result_json(category_points: List[CategoryPoints]) -> str:
       "target":    {"label": "cup",   "centroid": [x,y,z],
                     "bbox_3d_world": {"min": [x,y,z], "max": [x,y,z]},
                     "point_count": N},
-      "workspace": { ... },
+      "destination": { ... },
       ...
     }
     """
     _CATEGORY_KEY = {
-        CATEGORY_TARGET:    'target',
-        CATEGORY_WORKSPACE: 'workspace',
+        CATEGORY_TARGET:      'target',
+        CATEGORY_DESTINATION: 'destination',
     }
     out: Dict = {}
     for cp in category_points:
