@@ -1,0 +1,131 @@
+@startuml ROS2 Node Graph
+left to right direction
+
+skinparam backgroundColor #FAFAFA
+skinparam packageStyle rectangle
+skinparam defaultTextAlignment center
+skinparam ArrowColor #444444
+skinparam ArrowFontSize 11
+skinparam usecaseBorderColor #555555
+
+' ── Legend ───────────────────────────────────────────────────────────────────
+legend top left
+  | Launch File | Color |
+  | grounded_sam_dual.launch.py           | <back:#AED6F1>        </back> |
+  | grounded_sam_ee.launch.py  (EE-only)  | <back:#D6EAF8>        </back> |
+  | inst_input_qwen.launch.py             | <back:#FAD7A0>        </back> |
+  | multi_view_projector.launch.py        | <back:#ABEBC6>        </back> |
+  | mask_projector.launch.py  (Gazebo)    | <back:#D5D8DC>        </back> |
+  | capstone_pick_pipeline.launch.py      | <back:#F1948A>        </back> |
+  | ros2 run  (no dedicated launch)       | <back:#D7BDE2>        </back> |
+  | Isaac Sim  (external)                 | <back:#FDEBD0>        </back> |
+endlegend
+
+' ── Isaac Sim (external) ─────────────────────────────────────────────────────
+package "Isaac Sim  [external]" #FFF8F0 {
+  (camera\npublisher) #FDEBD0
+  (joint state\npublisher) #FDEBD0
+}
+
+' ── grounded_sam_pkg ─────────────────────────────────────────────────────────
+package "grounded_sam_pkg" {
+  (grounded_sam_node) #AED6F1
+  note bottom of (grounded_sam_node)
+    grounded_sam_dual.launch.py  — EE + Top dual view
+    grounded_sam_ee.launch.py    — EE only, single view
+  end note
+
+  (qwen_stub_node) #D7BDE2
+  note bottom of (qwen_stub_node)
+    ros2 run grounded_sam_pkg qwen_stub_node
+    Placeholder until real Qwen VLM is wired.
+    Hardcodes label→category mapping.
+  end note
+}
+
+' ── qwen_pkg ─────────────────────────────────────────────────────────────────
+package "qwen_pkg" {
+  (instruction\nprompt_node) #FAD7A0
+  (qwen_bridge) #FAD7A0
+  note bottom of (qwen_bridge)
+    inst_input_qwen.launch.py
+    Real VLM path — replaces qwen_stub_node.
+    Only publishes labeled_detections,
+    not a mask pass-through.
+  end note
+}
+
+' ── mask_projection_pkg ──────────────────────────────────────────────────────
+package "mask_projection_pkg" {
+  (multi_view\nprojector_node) #ABEBC6
+  note bottom of (multi_view\nprojector_node)
+    multi_view_projector.launch.py
+    Dual-camera world-frame point cloud.
+    /qwen/mask_image is the trigger.
+  end note
+
+  (mask_projector\nnode) #D5D8DC
+  note bottom of (mask_projector\nnode)
+    mask_projector.launch.py
+    Gazebo single-camera demo only.
+    Do not modify.
+  end note
+}
+
+' ── target_pose_bridge_pkg ───────────────────────────────────────────────────
+package "target_pose_bridge_pkg" {
+  (target_pose\nbridge_node) #F1948A
+}
+
+' ── moveit_isaac_bridge_pkg ──────────────────────────────────────────────────
+package "moveit_isaac_bridge_pkg" {
+  (joint_trajectory\nbridge_node) #F1948A
+  (move_group) #F1948A
+  (rviz2) #F1948A
+  note bottom of (joint_trajectory\nbridge_node)
+    capstone_pick_pipeline.launch.py
+    (also: panda_isaac_moveit.launch.py
+     or joint_trajectory_bridge.launch.py
+     standalone)
+  end note
+}
+
+' ── Camera feeds: Isaac Sim → perception ─────────────────────────────────────
+(camera\npublisher) --> (grounded_sam_node)      : /ee_camera/image_raw\n/camera/image_raw  [top, dual only]
+(camera\npublisher) --> (multi_view\nprojector_node) : /ee_camera/depth_image\n/ee_camera/camera_info\n/top_camera/depth_image\n/top_camera/camera_info
+
+' ── Joint state: Isaac Sim → bridge ──────────────────────────────────────────
+(joint state\npublisher) --> (joint_trajectory\nbridge_node) : /joint_states
+
+' ── User command ─────────────────────────────────────────────────────────────
+(instruction\nprompt_node) --> (qwen_bridge) : /user_instruction
+
+' ── GSAM → Qwen stub  (current working path) ─────────────────────────────────
+(grounded_sam_node) --> (qwen_stub_node) : /grounded_sam/detections_json\n/grounded_sam/mask_image
+
+' ── GSAM → Qwen bridge  (real VLM path) ─────────────────────────────────────
+(grounded_sam_node) --> (qwen_bridge)    : /grounded_sam/detections_json
+
+' ── GSAM → Gazebo single-cam projector  (demo only) ─────────────────────────
+(grounded_sam_node) ..> (mask_projector\nnode) : /grounded_sam/detections_json\n/grounded_sam/mask_image
+
+' ── Qwen stub → multi-view projector ─────────────────────────────────────────
+(qwen_stub_node) --> (multi_view\nprojector_node) : /qwen/labeled_detections\n/qwen/mask_image  [trigger]
+
+' ── Qwen bridge → multi-view projector  (dashed: needs mask relay) ───────────
+(qwen_bridge) ..> (multi_view\nprojector_node) : /qwen/labeled_detections\n(mask relay not yet wired)
+
+' ── Projection outputs ───────────────────────────────────────────────────────
+(multi_view\nprojector_node) --> (target_pose\nbridge_node) : /world_map_result
+(multi_view\nprojector_node) --> (rviz2)                    : /world_map
+
+' ── Pose conversion → MoveIt ─────────────────────────────────────────────────
+(target_pose\nbridge_node) --> (move_group) : /pre_grasp_target_pose\n/grasp_target_pose
+
+' ── MoveIt → trajectory bridge  (action) ────────────────────────────────────
+(move_group) --> (joint_trajectory\nbridge_node) : [FollowJointTrajectory action]\n/panda_arm_controller/\nfollow_joint_trajectory
+
+' ── Trajectory bridge → Isaac Sim ────────────────────────────────────────────
+(joint_trajectory\nbridge_node) --> (joint state\npublisher) : /joint_command
+
+@enduml

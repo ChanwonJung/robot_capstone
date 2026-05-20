@@ -35,6 +35,10 @@ build/
 install/
 log/
 
+# ---------- External model source clones ----------
+# Cloned locally for patching/dev — not tracked in git.
+GroundingDINO/
+
 # ---------- Isaac Sim ----------
 # Local Isaac Sim installation checked out/extracted inside this repo
 isaacsim/

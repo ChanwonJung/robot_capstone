@@ -16,7 +16,7 @@ from std_msgs.msg import String
 
 LABEL_TO_CATEGORY: dict[str, str] = {
     "cup":   "TARGET",
-    "table": "WORKSPACE",
+    "table": "DESTINATION",
 }
 
 

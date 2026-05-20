@@ -3,9 +3,9 @@ Maps mask pixel values → semantic categories → colors.
 
 Category assignment (order-based, tied to GSAM prompt order):
   mask pixel 0  → CATEGORY_FREE      (background)
-  mask pixel 1  → CATEGORY_TARGET    (detections_json[0])
-  mask pixel 2  → CATEGORY_WORKSPACE (detections_json[1])
-  mask pixel 3+ → CATEGORY_OBSTACLE  (detections_json[2+])
+  mask pixel 1  → CATEGORY_TARGET      (detections_json[0])
+  mask pixel 2  → CATEGORY_DESTINATION (detections_json[1])
+  mask pixel 3+ → CATEGORY_OBSTACLE    (detections_json[2+])
 
 All depth pixels are kept — background → FREE, detected → labeled.
 """
@@ -18,19 +18,19 @@ import numpy as np
 
 
 # ── Category IDs ─────────────────────────────────────────────────────────────
-CATEGORY_FREE:      int = 0   # background / unoccupied space (EE view)
-CATEGORY_TARGET:    int = 1   # object to be moved
-CATEGORY_WORKSPACE: int = 2   # surface / operational area
-CATEGORY_OBSTACLE:  int = 3   # anything else detected → treat as obstacle
-CATEGORY_UNKNOWN:   int = 4   # top-view geometry (unclassified by GSAM)
+CATEGORY_FREE:        int = 0   # background / unoccupied space (EE view)
+CATEGORY_TARGET:      int = 1   # object to be moved
+CATEGORY_DESTINATION: int = 2   # placement surface or goal location
+CATEGORY_OBSTACLE:    int = 3   # anything else detected → treat as obstacle
+CATEGORY_UNKNOWN:     int = 4   # top-view geometry (unclassified by GSAM)
 
 # ── Per-category color (R, G, B) ─────────────────────────────────────────────
 CATEGORY_COLOR: Dict[int, tuple] = {
-    CATEGORY_FREE:      ( 80,  80,  80),  # grey
-    CATEGORY_TARGET:    (  0, 200,  80),  # green
-    CATEGORY_WORKSPACE: (255, 220,   0),  # yellow
-    CATEGORY_OBSTACLE:  (220,  40,  40),  # red
-    CATEGORY_UNKNOWN:   (150,  80, 200),  # purple
+    CATEGORY_FREE:        ( 80,  80,  80),  # grey
+    CATEGORY_TARGET:      (  0, 200,  80),  # green
+    CATEGORY_DESTINATION: (255, 220,   0),  # yellow
+    CATEGORY_OBSTACLE:    (220,  40,  40),  # red
+    CATEGORY_UNKNOWN:     (150,  80, 200),  # purple
 }
 
 # ── Mask pixel value → category ──────────────────────────────────────────────
@@ -38,18 +38,18 @@ CATEGORY_COLOR: Dict[int, tuple] = {
 # pixel=0 (background) → CATEGORY_FREE (handled separately in apply_labels).
 # Only this dict needs to change when the upstream protocol changes.
 MASK_VALUE_TO_CATEGORY: Dict[int, int] = {
-    1: CATEGORY_TARGET,     # detections_json[0]
-    2: CATEGORY_WORKSPACE,  # detections_json[1]
+    1: CATEGORY_TARGET,       # detections_json[0]
+    2: CATEGORY_DESTINATION,  # detections_json[1]
     # 3+ → OBSTACLE (handled by fallback in apply_labels)
 }
 
 # ── "category" string → category ID (Qwen / stub path) ───────────────────────
-# Used when detections carry an explicit "category" field (e.g. from qwen_stub).
+# Used when detections carry an explicit "category" field (e.g. from qwen_bridge).
 # Fallback to MASK_VALUE_TO_CATEGORY when field is absent (legacy path).
 _CATEGORY_STR_TO_ID: Dict[str, int] = {
-    "TARGET":    CATEGORY_TARGET,
-    "WORKSPACE": CATEGORY_WORKSPACE,
-    "OBSTACLE":  CATEGORY_OBSTACLE,
+    "TARGET":      CATEGORY_TARGET,
+    "DESTINATION": CATEGORY_DESTINATION,
+    "OBSTACLE":    CATEGORY_OBSTACLE,
 }
 
 
