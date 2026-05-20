@@ -103,6 +103,8 @@ def generate_launch_description() -> LaunchDescription:
                               default_value='/world_map'),
         DeclareLaunchArgument('output_result_topic',
                               default_value='/world_map_result'),
+        DeclareLaunchArgument('output_raw_cloud_topic',
+                              default_value='/world_cloud_raw'),
 
         # ── Depth filter ──────────────────────────────────────────────────────
         DeclareLaunchArgument('min_depth', default_value='0.05'),
@@ -130,8 +132,9 @@ def generate_launch_description() -> LaunchDescription:
             'ee_camera_info_topic':  LaunchConfiguration('ee_camera_info_topic'),
             'mask_topic':            LaunchConfiguration('mask_topic'),
             'detections_topic':      LaunchConfiguration('detections_topic'),
-            'output_cloud_topic':    LaunchConfiguration('output_cloud_topic'),
-            'output_result_topic':   LaunchConfiguration('output_result_topic'),
+            'output_cloud_topic':     LaunchConfiguration('output_cloud_topic'),
+            'output_result_topic':    LaunchConfiguration('output_result_topic'),
+            'output_raw_cloud_topic': LaunchConfiguration('output_raw_cloud_topic'),
             'min_depth':             LaunchConfiguration('min_depth'),
             'max_depth':             LaunchConfiguration('max_depth'),
             'initials':              LaunchConfiguration('initials'),

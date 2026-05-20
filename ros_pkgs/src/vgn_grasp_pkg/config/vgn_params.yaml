@@ -1,0 +1,39 @@
+vgn_grasp_node:
+  ros__parameters:
+    # ROI cube side length (m) — must match VGN model training size
+    roi_size_m: 0.30
+
+    # TSDF voxel grid side count — fixed, matches VGN input shape (40x40x40)
+    tsdf_resolution: 40
+
+    # VGN weight file path (relative to GSAM_WS, or absolute)
+    vgn_model_path: "models/vgn_conv.pth"
+
+    # Grasp quality lower bound for NMS
+    min_quality: 0.5
+
+    # Max Top-K candidates to publish
+    max_candidates: 5
+
+    # Skip trigger if TARGET point_count is below this
+    min_point_count: 50
+
+    # Depth input topics (K from camera_info, R/t from extrinsics_config)
+    ee_depth_topic: "/ee_camera/depth_image"
+    ee_camera_info_topic: "/ee_camera/camera_info"
+    top_depth_topic: "/top_camera/depth_image"
+    top_camera_info_topic: "/top_camera/camera_info"
+
+    # Use top camera depth for TSDF integration (set false to use EE only)
+    use_top_depth: true
+
+    # Camera extrinsics YAML (R, t only — no K). Empty = mask_projection_pkg default.
+    extrinsics_config: ""
+
+    # Trigger and output topics
+    world_map_result_topic: "/world_map_result"
+    grasp_candidates_topic: "/grasp_candidates"
+
+    # TF frames
+    world_frame: "world"
+    robot_frame: "panda_link0"
