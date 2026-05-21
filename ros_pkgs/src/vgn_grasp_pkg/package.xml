@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>vgn_grasp_pkg</name>
+  <version>0.1.0</version>
+  <description>
+    VGN (Volumetric Grasping Network) integration node.
+    Subscribes to /world_map (labeled PointCloud2) and /world_map_result (JSON trigger),
+    builds a TSDF grid via KDTree, runs VGN inference, applies semantic filtering,
+    and publishes /grasp_candidates for MoveIt2.
+  </description>
+  <maintainer email="parksanghyun@todo.todo">parksanghyun</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
