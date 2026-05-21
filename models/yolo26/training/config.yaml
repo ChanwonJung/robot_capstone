@@ -1,0 +1,49 @@
+# Roboflow dataset registry for the Fast Brain YOLO26-seg training pipeline.
+#
+# Set your API key via environment variable BEFORE running any script:
+#   export ROBOFLOW_API_KEY=...
+# Do NOT commit your key into this file.
+
+datasets:
+  - role: hand
+    workspace: i-make-innovation-thailand
+    project: hand-segmentation-4s3j3
+    version: null
+    # Source class -> unified target class. Omit a source class to discard it.
+    class_map:
+      hand: hand
+
+  - role: forearm
+    # User's fork of ju-cvxbb/arm-ph7b7 — original had no published versions.
+    workspace: robot-capstone
+    project: arm-ph7b7-ytoc1
+    version: 1
+    class_map:
+      arm: forearm           # confirm after first successful download
+
+  - role: pet_bottle
+    # v2: 음료수 PET병 (이전 forth-vm1zs/pet-iwiy8은 PET 재활용 비닐이라 도메인 불일치)
+    workspace: alpha-alvlm
+    project: bottle-segmentation-y6kus
+    version: null
+    class_map:
+      Bottle: pet_bottle
+
+  - role: small_box
+    # v2: box-segmentation-jdd1s. 원본 21,030장이라 클래스 불균형 방지로 2000장 cap.
+    workspace: box-tbgxq
+    project: box-segmentation-jdd1s
+    version: null
+    max_images: 2000
+    class_map:
+      box: small_box
+
+# Unified class indices for the merged dataset (used by the trained model).
+target_classes:
+  0: hand
+  1: forearm
+  2: pet_bottle
+  3: small_box
+
+# Roboflow export format. "yolov8" outputs polygon labels for IS projects.
+export_format: yolov8

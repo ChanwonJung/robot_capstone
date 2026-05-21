@@ -1,0 +1,25 @@
+# Downloaded raw datasets per source project — heavy, regenerable.
+raw_downloads/
+
+# Converted per-source datasets (YOLO format) — regenerable via merge_datasets.py.
+datasets/
+
+# Merged YOLO-format dataset.
+merged/
+
+# ultralytics training output (weights, plots, logs).
+runs/
+
+# Local env / cache.
+.env
+*.cache
+__pycache__/
+*.pyc
+
+# Verification report (generated).
+verification_report.json
+
+# Auto-downloaded pretrained weights at training/ root.
+*.pt
+*.engine
+*.onnx

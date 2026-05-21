@@ -1,0 +1,9 @@
+# Path to YOLO instance-seg weights.
+# - Relative paths are resolved against the project root.
+# - Bare model names (e.g. "yolo26s-seg.pt") trigger ultralytics auto-download.
+# - Default points at a release symlink under models/yolo26/release/.
+#   To swap to a new training run, just retarget the symlink — no yaml edit needed.
+# - .engine = TensorRT FP16 (fast, GPU/driver-specific — rebuild per machine).
+#   .pt = portable PyTorch fallback (slower, works on any GPU). Swap the suffix
+#   here to fall back if the engine fails to load on a different node.
+weights: "models/yolo26/release/capstone-hazard-seg-best.engine"
