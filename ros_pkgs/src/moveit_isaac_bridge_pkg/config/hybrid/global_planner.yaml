@@ -1,0 +1,28 @@
+# Global planner — runs the full pick path once via the OMPL pipeline (moveit_cpp).
+global_planner_name: "moveit_hybrid_planning/MoveItPlanningPipeline"
+
+planning_scene_monitor_options:
+  name: "planning_scene_monitor"
+  robot_description: "robot_description"
+  # /joint_states is the wall-time topic (joint_state_restamp_node republishes
+  # Isaac's /joint_states_isaac here). moveit_cpp hard-uses 'joint_states' anyway.
+  joint_state_topic: "/joint_states"
+  attached_collision_object_topic: "/moveit_cpp/planning_scene_monitor"
+  publish_planning_scene_topic: "/planning_scene"
+  monitored_planning_scene_topic: "/planning_scene"
+  # Don't block init for long on /joint_states (Isaac may not be Playing yet at
+  # launch). The monitor keeps listening and picks up the state after Play; a
+  # short timeout lets the global planner advertise its action server quickly so
+  # the manager can connect to it.
+  wait_for_initial_state_timeout: 5.0
+
+planning_pipelines:
+  pipeline_names: ["ompl"]
+
+plan_request_params:
+  planning_attempts: 1
+  planning_pipeline: ompl
+  # Slow global motion so the hazard bottle crosses the path mid-motion (and the
+  # stop+resume is clearly visible). The client's request value also sets this.
+  max_velocity_scaling_factor: 0.015
+  max_acceleration_scaling_factor: 0.05

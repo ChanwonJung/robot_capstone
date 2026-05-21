@@ -1,0 +1,11 @@
+# Hybrid Planning Manager logic.
+#
+# SinglePlanExecution: plan the global trajectory once, then execute it with the
+# local planner. The manager does NOT re-plan on a local collision — instead the
+# local planner (ForwardTrajectory + stop_before_collision) halts in place and
+# resumes when the obstacle clears. This is the stop+resume behaviour we want for
+# a transient hazard (the flying bottle).
+#
+# For Phase 2b (persistent hazard, e.g. an arm parked in front of the EE) swap to
+# "moveit_hybrid_planning/ReplanInvalidatedTrajectory" to re-plan around it.
+planner_logic_plugin_name: "moveit_hybrid_planning/SinglePlanExecution"
