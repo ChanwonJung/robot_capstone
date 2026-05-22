@@ -35,7 +35,7 @@ BASE_URL: str = f"http://localhost:{LOCAL_PORT}/v1"
 API_KEY: str = "EMPTY"
 
 # Must match the model name your vLLM server was started with
-MODEL_NAME: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+MODEL_NAME: str = "Qwen/Qwen3.5-VL-9B-Instruct"
 
 REQUEST_TIMEOUT: float = 120.0
 
@@ -51,7 +51,7 @@ def ask_qwen(
     image_bytes: bytes | None = None,
     image_media_type: str = "image/jpeg",
     system_prompt: str | None = None,
-    max_tokens: int = 512,
+    max_tokens: int = 1024,
     temperature: float = 0.0,
 ) -> str:
     """
@@ -102,9 +102,11 @@ def ask_qwen(
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
 
-    return response.choices[0].message.content
+    msg = response.choices[0].message
+    return msg.content or getattr(msg, "reasoning_content", None)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -118,7 +120,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--text", required=True, help="Text prompt to send.")
     parser.add_argument("--image", default=None, help="Path to image file (JPEG/PNG/WebP).")
     parser.add_argument("--system", default=None, help="Optional system prompt.")
-    parser.add_argument("--max-tokens", type=int, default=512)
+    parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument(
         "--port", type=int, default=LOCAL_PORT,
