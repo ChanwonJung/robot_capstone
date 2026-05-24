@@ -64,6 +64,103 @@ APPLE_SCALE = np.array([0.001, 0.001, 0.001])
 GLASS_SCALE = np.array([0.02, 0.02, 0.02])
 RED_BALL_SCALE = np.array([0.05, 0.05, 0.05])
 BOOK_SCALE = np.array([0.08, 0.08, 0.08])
+
+# Hazard placeholders for Fast Brain testing. Procedural for now; positions
+# spawn outside the top-view FOV and have initial velocity so the hazards "fly
+# in" toward the workspace when the simulation plays. Tune in viewport, then
+# Ctrl+S to persist.
+CARDBOX_ASSET = (
+    XR_CONTENT_ROOT
+    / "Assets" / "XR" / "Stages" / "Indoor" / "Warehouse" / "Containers" / "Cardboard"
+    / "Cardbox_C2.usd"
+)
+# Top-view camera FOV at z=0.5 is roughly x∈[-0.7,0.7], y∈[-0.2,0.6]
+# (focal=4mm, 3.84mm aperture, camera at z=2.0). Spawning hazards at
+# |x|≈2.5 or |y|≈2.5 keeps them clearly outside the frame at t=0 and gives
+# ~4-5s of fly-in time at v=0.4 m/s. Gravity disabled so they cruise straight
+# at constant altitude through the robot's reaching path (z≈0.5).
+HAZARD_BOX_TRANSLATE = np.array([2.50, -0.09, 0.35])
+HAZARD_BOX_ROTATION_DEG = np.array([0.0, 0.0, 30.0])
+# Cardbox_C2 USD is authored in centimeters (metersPerUnit=0.01) while the
+# parent stage is in meters. USD does NOT auto-rescale references, so the
+# visual scale bakes in the 0.01 unit factor.
+# native ≈ 0.51 m × 0.30 = 0.15 m box at scale=0.003.
+HAZARD_BOX_SCALE = np.array([0.003, 0.003, 0.003])
+HAZARD_BOX_FALLBACK_SIZE = np.array([0.14, 0.14, 0.14])
+HAZARD_BOX_LINEAR_VELOCITY = np.array([-0.4, 0.0, 0.0])
+
+# pet_bottle hazard. Uses real PET USD captured into the v3 dataset so train
+# and inference share the same render. Spawn / velocity mirror HazardBox so
+# the top-view sees an off-frame approach then a base/glass crossing.
+HAZARD_BOTTLE_ASSET = (
+    "https://omniverse-content-production.s3-us-west-2.amazonaws.com/"
+    "Assets/DigitalTwin/Assets/Warehouse/Storage/Bottles/Plastic/"
+    "NaturalBostonRound_A/NaturalBostonRoundBottle_A02_PR_NVD_01.usd"
+)
+# x=0.85: just outside the top-view FOV edge (~0.7) so it's off-frame at rest but
+# enters the workspace ~0.5 s after the launch trigger (fired when the arm starts).
+# Appears-in-FOV delay ≈ (x - 0.7) / |velocity| s. Pull toward 0.78 to appear even
+# sooner, push out for later. (Stay under the stage wall that blocked 4.5+.)
+HAZARD_BOTTLE_TRANSLATE = np.array([0.85, -0.09, 0.35])
+HAZARD_BOTTLE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
+# Warehouse Bottles authored in centimeters (metersPerUnit=0.01) like Cardbox.
+# Bake the unit factor + final-size scale into one factor. Tune in viewport
+# if the bottle reads too small/large after a fresh import.
+HAZARD_BOTTLE_SCALE = np.array([0.01, 0.01, 0.01])
+HAZARD_BOTTLE_RADIUS = 0.035    # collider approx (real PET ~6cm diameter)
+HAZARD_BOTTLE_HEIGHT = 0.22     # collider approx
+# Velocity applied to the bottle when /hazard/launch_bottle fires (it sits still
+# until then). From x=1.0 at -0.3 m/s it reaches the arm's goal-x (~0.71) in ~1 s
+# and crosses the workspace over the next ~2 s — i.e. during the grasp motion.
+# Tune magnitude to match how fast you want the hazard to cross.
+HAZARD_BOTTLE_LINEAR_VELOCITY = np.array([-0.9, 0.0, 0.0])
+
+# Capture-only static humans for hand/forearm dataset (NOT hazards — no rigid
+# body, no motion). NVIDIA 4.2 People catalog has ~8 characters total. Pick
+# whichever reads least uncanny + has exposed forearms; swap the URL below.
+PEOPLE_ROOT = (
+    "https://omniverse-content-production.s3-us-west-2.amazonaws.com/"
+    "Assets/Isaac/4.2/Isaac/People/Characters"
+)
+CAPTURE_HUMAN_ASSET_BUSINESS_FEMALE = f"{PEOPLE_ROOT}/F_Business_02/F_Business_02.usd"
+CAPTURE_HUMAN_ASSET_CONSTRUCTION_NEW = (
+    f"{PEOPLE_ROOT}/original_male_adult_construction_05_new/male_adult_construction_05_new.usd"
+)
+CAPTURE_HUMAN_ASSET_CONSTRUCTION_02 = (
+    f"{PEOPLE_ROOT}/original_male_adult_construction_02/male_adult_construction_02.usd"
+)
+CAPTURE_HUMAN_ASSET_FEMALE_MEDICAL = f"{PEOPLE_ROOT}/F_Medical_01/F_Medical_01.usd"
+CAPTURE_HUMAN_ASSET_MALE_MEDICAL = f"{PEOPLE_ROOT}/M_Medical_01/M_Medical_01.usd"
+CAPTURE_HUMAN_ASSET_POLICE_FEMALE = (
+    f"{PEOPLE_ROOT}/original_female_adult_police_01/female_adult_police_01.usd"
+)
+# Active character for capture. Swap to any of the above constants.
+CAPTURE_HUMAN_ASSET = CAPTURE_HUMAN_ASSET_BUSINESS_FEMALE
+# Stage is Z-up but the 4.2 People assets are authored Y-up. Additionally
+# the character's /Root prim has a baked xformOp:rotateXYZ = (-90, 0, 0)
+# inside the referenced USD. Our outer rotate composes onto that, so to land
+# USD +Y (head) at stage +Z (up) we need net X = +90  ⇒  outer X = +180.
+# Verified by simulating wrapper composition with bbox probe:
+#   outer (90, 0, *) gives upright (mesh +Z up in stage). outer (180,*,*) lays flat.
+# Feet at character-local z=-0.12 after upright rotation, so translate_z = floor(-0.73) - (-0.12) = -0.61.
+CAPTURE_HUMAN_TRANSLATE = np.array([0.40, 0.20, -0.61])     # CAPTURE: inside top-camera FOV (x[-0.7,0.7] y[-0.2,0.6]); ignore table clip for capture phase
+# CAPTURE_HUMAN_TRANSLATE = np.array([0.47, -1.10, -0.61])  # SCENARIO: next to basket, table-side standing (out of top-FOV — for hazard phase only)
+CAPTURE_HUMAN_ROTATION_DEG = np.array([90.0, 0.0, 0.0])     # X+90° → upright; tweak the Z (yaw) to face the robot base
+CAPTURE_HUMAN_SCALE = np.array([1.0, 1.0, 1.0])             # NVIDIA People assets are authored in meters
+
+HAZARD_ARM_TRANSLATE = np.array([0.0, 2.50, 0.55])
+HAZARD_ARM_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
+HAZARD_FOREARM_RADIUS = 0.045
+HAZARD_FOREARM_LENGTH = 0.28
+HAZARD_HAND_RADIUS = 0.06
+HAZARD_ARM_LINEAR_VELOCITY = np.array([0.0, -0.4, 0.0])
+
+HAZARD_OBJECT_PATHS = {
+    "HazardBox": "/World/CapstoneAdditions/Hazards/HazardBox",
+    "HazardBottle": "/World/CapstoneAdditions/Hazards/HazardBottle",
+    "HazardArm": "/World/CapstoneAdditions/Hazards/HazardArm",
+}
+
 TOP_CAMERA_POSITION = np.array([0.0, 0.2, 2.0])
 TOP_CAMERA_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 TOP_CAMERA_FOCAL_LENGTH_MM = 4.0
@@ -162,6 +259,30 @@ def create_dynamic_body_root(stage, path, translate, mass):
     mass_api = UsdPhysics.MassAPI.Apply(root)
     mass_api.CreateMassAttr(float(mass))
     return root
+
+
+def create_kinematic_body_root(stage, path, translate, rotate_xyz_deg=None):
+    """Kinematic rigid body — no gravity, scriptable transform."""
+    root = define_xform(stage, path, translate=translate, rotate_xyz_deg=rotate_xyz_deg)
+    rigid_body = UsdPhysics.RigidBodyAPI.Apply(root)
+    rigid_body.CreateRigidBodyEnabledAttr(True)
+    rigid_body.CreateKinematicEnabledAttr(True)
+    physx_rigid_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root)
+    physx_rigid_body.CreateDisableGravityAttr(True)
+    return root
+
+
+def apply_initial_motion(root_prim, linear_velocity):
+    """Mark a dynamic body awake, disable gravity, and set initial velocity.
+
+    Gravity is disabled so hazards drift across the workspace at constant
+    altitude instead of arcing down before they reach the target zone.
+    """
+    rigid_body = UsdPhysics.RigidBodyAPI.Apply(root_prim)
+    rigid_body.CreateStartsAsleepAttr(False)
+    rigid_body.CreateVelocityAttr(Gf.Vec3f(*[float(v) for v in linear_velocity]))
+    physx_rigid_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root_prim)
+    physx_rigid_body.CreateDisableGravityAttr(True)
 
 
 def build_box_collider(stage, path, size, translate=None, rotate_xyz_deg=None):
@@ -339,6 +460,126 @@ def build_tabletop_items(stage, root_path):
     build_book(stage, f"{props_root.GetPath()}/Book")
     build_basket(stage, f"{props_root.GetPath()}/Basket")
     return props_root
+
+
+def build_hazard_box(stage, path):
+    """small_box hazard — uses Cardbox_C2 USD from XR Content if available."""
+    root = create_dynamic_body_root(stage, path, HAZARD_BOX_TRANSLATE, mass=0.4)
+    set_xform(root, rotate_xyz_deg=HAZARD_BOX_ROTATION_DEG)
+    if CARDBOX_ASSET.exists():
+        add_visual_reference(
+            stage,
+            f"{path}/Visual",
+            CARDBOX_ASSET,
+            scale=HAZARD_BOX_SCALE,
+        )
+    else:
+        body = UsdGeom.Cube.Define(stage, f"{path}/Visual/Body").GetPrim()
+        UsdGeom.Cube(body).CreateSizeAttr(1.0)
+        set_xform(body, scale=HAZARD_BOX_FALLBACK_SIZE)
+        set_display_color(body, [0.72, 0.55, 0.32])
+    build_box_collider(
+        stage,
+        f"{path}/Collider",
+        size=HAZARD_BOX_FALLBACK_SIZE.tolist(),
+    )
+    apply_initial_motion(root, HAZARD_BOX_LINEAR_VELOCITY)
+    return root
+
+
+def build_hazard_bottle(stage, path):
+    """pet_bottle hazard — references the NaturalBostonRound PET USD used to
+    build the v3 capture dataset, so train and inference share the same render.
+    """
+    root = create_dynamic_body_root(stage, path, HAZARD_BOTTLE_TRANSLATE, mass=0.25)
+    set_xform(root, rotate_xyz_deg=HAZARD_BOTTLE_ROTATION_DEG)
+    add_visual_reference(
+        stage,
+        f"{path}/Visual",
+        HAZARD_BOTTLE_ASSET,
+        scale=HAZARD_BOTTLE_SCALE,
+    )
+    build_cylinder_collider(
+        stage,
+        f"{path}/Collider",
+        radius=HAZARD_BOTTLE_RADIUS,
+        height=HAZARD_BOTTLE_HEIGHT,
+    )
+    # Stationary (gravity off, zero velocity) until /hazard/launch_bottle fires —
+    # the bottle then gets HAZARD_BOTTLE_LINEAR_VELOCITY so it flies in synced with
+    # the arm motion. See _bottle_launch_loop / _apply_bottle_launch_velocity.
+    apply_initial_motion(root, np.zeros(3))
+    return root
+
+
+def build_hazard_arm(stage, path):
+    """hand/forearm placeholder — dynamic so it flies in with initial velocity."""
+    root = create_dynamic_body_root(stage, path, HAZARD_ARM_TRANSLATE, mass=0.6)
+    set_xform(root, rotate_xyz_deg=HAZARD_ARM_ROTATION_DEG)
+    forearm = UsdGeom.Cylinder.Define(stage, f"{path}/Visual/Forearm").GetPrim()
+    UsdGeom.Cylinder(forearm).CreateRadiusAttr(float(HAZARD_FOREARM_RADIUS))
+    UsdGeom.Cylinder(forearm).CreateHeightAttr(float(HAZARD_FOREARM_LENGTH))
+    set_display_color(forearm, [0.92, 0.76, 0.66])
+    hand = UsdGeom.Sphere.Define(stage, f"{path}/Visual/Hand").GetPrim()
+    UsdGeom.Sphere(hand).CreateRadiusAttr(float(HAZARD_HAND_RADIUS))
+    hand_offset_z = HAZARD_FOREARM_LENGTH * 0.5 + HAZARD_HAND_RADIUS * 0.6
+    set_xform(hand, translate=[0.0, 0.0, hand_offset_z])
+    set_display_color(hand, [0.96, 0.82, 0.72])
+    build_cylinder_collider(
+        stage,
+        f"{path}/ColliderForearm",
+        radius=HAZARD_FOREARM_RADIUS,
+        height=HAZARD_FOREARM_LENGTH,
+    )
+    build_sphere_collider(
+        stage,
+        f"{path}/ColliderHand",
+        radius=HAZARD_HAND_RADIUS,
+        translate=[0.0, 0.0, hand_offset_z],
+    )
+    apply_initial_motion(root, HAZARD_ARM_LINEAR_VELOCITY)
+    return root
+
+
+def build_capture_humans(stage, root_path):
+    """Static human prim(s) for hand/forearm capture. Visual reference only —
+    no rigid body, no collider, no motion. Move/rotate/scale in the viewport
+    (G/R/S keys or gizmos) while capturing top + ee shots. Swap the URL
+    constant to cycle characters. Remove this call once dataset is complete.
+
+    Wrapper-Xform pattern: outer rotate lives on Subject, the asset reference
+    on /Body. This way Subject's outer rotation COMPOSES with the asset's
+    baked /Root rotation instead of overriding it (the hazard builders do the
+    same).
+    """
+    if stage.GetPrimAtPath(root_path):
+        stage.RemovePrim(root_path)
+    humans_root = define_xform(stage, root_path)
+    subject = define_xform(
+        stage,
+        f"{humans_root.GetPath()}/Subject",
+        translate=CAPTURE_HUMAN_TRANSLATE,
+        rotate_xyz_deg=CAPTURE_HUMAN_ROTATION_DEG,
+        scale=CAPTURE_HUMAN_SCALE,
+    )
+    add_visual_reference(
+        stage,
+        f"{subject.GetPath()}/Body",
+        CAPTURE_HUMAN_ASSET,
+    )
+    return humans_root
+
+
+def build_hazards(stage, root_path):
+    if stage.GetPrimAtPath(root_path):
+        stage.RemovePrim(root_path)
+    hazards_root = define_xform(stage, root_path)
+    # Active hazard — single fly-in for v3 detection check. Re-enable other
+    # builders one-at-a-time as their captured-and-trained USDs come in.
+    build_hazard_bottle(stage, f"{hazards_root.GetPath()}/HazardBottle")
+    # build_hazard_box(stage, f"{hazards_root.GetPath()}/HazardBox")
+    # build_hazard_arm(stage, f"{hazards_root.GetPath()}/HazardArm")
+    return hazards_root
 
 
 def find_franka_root(stage):
@@ -614,6 +855,11 @@ def apply_scene():
     if table_prim and table_prim.IsValid():
         table_prim.SetActive(False)
     build_tabletop_items(stage, f"{additions_root.GetPath()}/TabletopItems")
+    # === Mode toggle ===
+    # Capture mode  : `build_capture_humans` ON, `build_hazards` OFF
+    # Hazard mode   : `build_capture_humans` OFF, `build_hazards` ON (default flight scenario)
+    # build_capture_humans(stage, f"{additions_root.GetPath()}/CaptureHumans")
+    build_hazards(stage, f"{additions_root.GetPath()}/Hazards")
     ee_camera = create_ee_camera(stage)
     top_camera = create_camera(
         stage,
@@ -631,9 +877,69 @@ def apply_scene():
     FRANKA_JOINT_ROS_BRIDGE = create_ros2_joint_graph(
         articulation_path="/Franka",
         graph_path="/World/ROS/FrankaJointGraph",
-        joint_state_topic="/joint_states",
+        # Isaac publishes raw (sim-time) joint states here; joint_state_restamp_node
+        # re-stamps them to wall time and republishes on /joint_states, which the
+        # MoveIt stack (incl. moveit_cpp's hard-coded 'joint_states') consumes.
+        joint_state_topic="/joint_states_isaac",
         joint_command_topic="/joint_command",
     )
+
+
+def _apply_bottle_launch_velocity():
+    """Give the stationary hazard bottle its flight velocity (runtime, during Play).
+
+    Isaac's exact runtime-velocity API varies by version; try the likely ones and
+    log which worked so it can be pinned down in-sim.
+    """
+    path = HAZARD_OBJECT_PATHS["HazardBottle"]
+    v = HAZARD_BOTTLE_LINEAR_VELOCITY
+    try:
+        from isaacsim.core.prims import RigidPrim
+        rb = RigidPrim(path)
+        rb.set_velocities(np.array([[float(v[0]), float(v[1]), float(v[2]), 0.0, 0.0, 0.0]], dtype=np.float32))
+        print(f"[hazard] bottle launched via RigidPrim.set_velocities v={v.tolist()}")
+        return
+    except Exception as exc:
+        print(f"[hazard] RigidPrim.set_velocities failed: {exc}")
+    try:
+        from isaacsim.core.prims import SingleRigidPrim
+        rb = SingleRigidPrim(path)
+        rb.set_linear_velocity(np.array([float(v[0]), float(v[1]), float(v[2])], dtype=np.float32))
+        print(f"[hazard] bottle launched via SingleRigidPrim.set_linear_velocity v={v.tolist()}")
+        return
+    except Exception as exc:
+        print(f"[hazard] SingleRigidPrim.set_linear_velocity failed: {exc}")
+    print("[hazard] ERROR: could not apply bottle velocity — report the errors above")
+
+
+async def _bottle_launch_loop():
+    """Launch the stationary bottle when /hazard/launch_bottle is received."""
+    try:
+        import rclpy
+        from std_msgs.msg import Empty as _Empty
+    except Exception as exc:
+        print(f"[hazard] rclpy unavailable in Isaac python; bottle trigger disabled: {exc}")
+        return
+    try:
+        if not rclpy.ok():
+            rclpy.init()
+    except Exception as exc:
+        print(f"[hazard] rclpy.init failed: {exc}")
+        return
+    node = rclpy.create_node("hazard_bottle_launcher")
+    pending = {"go": False}
+    node.create_subscription(_Empty, "/hazard/launch_bottle", lambda _m: pending.__setitem__("go", True), 10)
+    print("[hazard] bottle launcher ready — waiting for /hazard/launch_bottle")
+    app = omni.kit.app.get_app()
+    while True:
+        try:
+            rclpy.spin_once(node, timeout_sec=0.0)
+        except Exception:
+            pass
+        if pending["go"]:
+            pending["go"] = False
+            _apply_bottle_launch_velocity()
+        await app.next_update_async()
 
 
 async def main():
@@ -657,6 +963,7 @@ async def main():
         DEPTH_OVERLAY.destroy()
     DEPTH_OVERLAY = TabletopDepthOverlay(stage)
     print(f"Saved: {OUTPUT_STAGE}")
+    asyncio.ensure_future(_bottle_launch_loop())
 
 
 asyncio.ensure_future(main())
