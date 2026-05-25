@@ -1,0 +1,6 @@
+roboflow>=1.1.50
+pyyaml>=6.0
+ultralytics>=8.3.0
+# torch is pulled in by ultralytics. Install a CUDA-matched build first if needed:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1.0

@@ -25,6 +25,10 @@ def create_ros2_joint_graph(
         {
             keys.CREATE_NODES: [
                 ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                # NOTE: Isaac stamps with sim time, but there is no /clock and the
+                # ROS stack runs on wall time. The joint_state_restamp_node
+                # (moveit_isaac_bridge_pkg) re-stamps /joint_states to wall time
+                # for MoveIt, so the stamp source here does not matter downstream.
                 ("ReadSimTime", "isaacsim.core.nodes.IsaacReadSimulationTime"),
                 ("Context", "isaacsim.ros2.bridge.ROS2Context"),
                 ("PublishJointState", "isaacsim.ros2.bridge.ROS2PublishJointState"),

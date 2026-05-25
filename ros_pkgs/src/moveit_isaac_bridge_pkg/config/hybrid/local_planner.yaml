@@ -1,0 +1,34 @@
+# Local planner — follows the global trajectory at high rate and reacts to the
+# live planning scene (the injected hazard collision object).
+robot_description: "robot_description"
+trajectory_operator_plugin_name: "moveit_hybrid_planning/SimpleSampler"
+local_constraint_solver_plugin_name: "moveit_hybrid_planning/ForwardTrajectory"
+# Low rate on purpose: ForwardTrajectory aborts after a HARD-CODED number of
+# "stuck" iterations while holding at a collision. Hold time before abort =
+# (threshold iters / frequency), so a low frequency lets the arm hold longer —
+# long enough for the hazard bottle to pass and the local planner to RESUME
+# (instead of aborting + crashing). Raise if motion is too choppy, lower if it
+# aborts before the bottle clears. (Known hybrid-demo limitation, moveit2 #819.)
+local_planning_frequency: 2.0
+global_solution_topic: "global_trajectory"
+
+# Output: stream joint positions as Float64MultiArray (group joint order).
+# Our hybrid_command_bridge_node converts this to /joint_command (JointState)
+# for Isaac Sim — we do NOT use ros2_control here.
+local_solution_topic: "/hybrid/joint_position_command"
+local_solution_topic_type: "std_msgs/Float64MultiArray"
+publish_joint_positions: true
+publish_joint_velocities: false
+
+group_name: "panda_arm"
+
+# Live scene inputs. collision_object_topic is fed by the Phase 1 injector
+# (hazard_collision_injector_node), so the flying bottle blocks the local path.
+monitored_planning_scene: "/planning_scene"
+collision_object_topic: "/collision_object"
+# Wall-time joint states (joint_state_restamp_node republishes here).
+joint_states_topic: "/joint_states"
+
+# ForwardTrajectory: stop in place when a collision is detected ahead on the
+# reference trajectory; resume forwarding once the path clears.
+stop_before_collision: true

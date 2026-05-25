@@ -1,0 +1,23 @@
+# ROS 2 ParameterFile loaded by every yolo_hazard_node instance.
+# Wildcard ('/**') applies these values to both yolo_hazard_top and yolo_hazard_ee.
+# Per-camera wiring (model_config, image_topic, detections_topic, annotated_topic)
+# stays in launch files. Touch this file to retune inference; touch launch to rewire.
+
+/**:
+  ros__parameters:
+    # Inference params.
+    device: "cuda:0"          # "cpu", "cuda:0", or "auto"
+    conf_threshold: 0.35
+    iou_threshold: 0.5
+    imgsz: 640
+    half: true                # FP16 for Ampere+ GPUs
+
+    # Class filter — only enforced when filter_by_class=true.
+    # v3 IsaacSim-native 3-class model: 0=arm, 1=bottle, 2=box.
+    filter_by_class: true
+    class_allowlist: [0, 1, 2]
+
+    # Debug overlay topic — set false during FPS measurement (encode/publish overhead).
+    publish_annotated: true
+
+    fps_log_interval_sec: 5.0
