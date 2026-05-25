@@ -11,12 +11,12 @@ Language-directed robotic manipulator that interprets ambiguous natural language
 
 ## Architecture: Slow Brain / Fast Brain
 
-**Slow Brain** runs once per command. The user types a natural-language instruction; a grounding model (GSAM) generates labeled bounding boxes + segmentation masks from both cameras; a VLM (Qwen) selects the target and destination from the annotated detections; a projection node fuses both depth streams into a labeled 3D point cloud.
+**Slow Brain** runs once per command. The user types a natural-language instruction; a grounding model (GSAM) generates labeled bounding boxes + segmentation masks from both cameras; a VLM (Qwen) selects the target and destination from the annotated detections; a projection node fuses both depth streams into a labeled 3D point cloud; VGN infers grasp candidates from a signed TSDF.
 
 **Fast Brain** runs at >30 FPS. A YOLO-based detector (`yolo_hazard_pkg`) monitors both cameras for hazards simultaneously. Detected hazards are injected as dynamic collision objects into the MoveIt planning scene, which uses hybrid planning for long-range trajectory + low-latency local reactions.
 
 ## Hardware
-Three-node distributed setup over Tailscale. The simulation node runs Isaac Sim, ROS 2, and MoveIt. A remote GPU cluster handles all heavy Slow Brain inference via vLLM (OpenAI-compatible API). The development node runs the YOLO tracking loop and RViz. Each local node is constrained to 12GB VRAM — anything heavier offloads to the cluster.
+Three-node distributed setup over Tailscale. The simulation node runs Isaac Sim, ROS 2, and MoveIt. A remote GPU cluster (`aurora-g6` via `aurora.khu.ac.kr`) handles all heavy Slow Brain inference via vLLM (OpenAI-compatible API). The development node runs the YOLO tracking loop and RViz. Each local node is constrained to 12GB VRAM — anything heavier offloads to the cluster.
 
 ## Key Constraints
 - Avoidance loop must sustain >30 FPS
@@ -35,12 +35,20 @@ python3 -m venv gsam_venv
 source gsam_venv/bin/activate
 pip install -r ros_pkgs/src/grounded_sam_pkg/requirements.txt
 
-# 2. Download model weights
+# 2. Download GSAM model weights
 mkdir -p models/g-sam
 wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth \
      -O models/g-sam/groundingdino_swint_ogc.pth
 wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
      -O models/g-sam/sam_vit_b_01ec64.pth
+
+# 3. VGN submodule + weights (needed only for vgn_grasp_pkg)
+git submodule add https://github.com/ethz-asl/vgn external/vgn
+pip install pytorch-ignite tqdm
+# Download data.zip from ethz-asl/vgn GitHub → extract → copy:
+cp data/models/vgn_conv.pth models/vgn_conv.pth
+# Filename convention: vgn_<network>.pth — load_network() parses the second field.
+# Wrong filename → KeyError at startup.
 ```
 
 ### Per-session environment
@@ -49,6 +57,8 @@ wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
 source launch_env.bash
 ```
 `launch_env.bash` sources `/opt/ros/jazzy/setup.bash`, the workspace install overlay at `ros_pkgs/install/setup.bash`, and injects `gsam_venv/lib/python3.12/site-packages` into `PYTHONPATH` so torch/groundingdino are visible alongside ROS 2 Python.
+
+**SSH tunnel side effect**: `launch_env.bash` also automatically opens an SSH tunnel `localhost:8000 → aurora-g6:8000` via the jump host `aurora.khu.ac.kr:30080` using the username `jaewonheo1101`. If port 8000 is already bound it skips silently.
 
 ### Build ROS packages
 ```bash
@@ -101,9 +111,14 @@ ros2 launch mask_projection_pkg multi_view_projector.launch.py \
   extrinsics_config:=<path>/camera_extrinsics_isaac.yaml \
   ee_depth_topic:=/isaac/ee/depth_image \
   top_depth_topic:=/isaac/top/depth_image
+
+# Terminal 4 (optional) — VGN grasp detection → /grasp_candidates
+source launch_env.bash
+ros2 launch vgn_grasp_pkg vgn_grasp.launch.py \
+  extrinsics_config:=<path>/camera_extrinsics_isaac.yaml
 ```
 
-### Full motion pipeline
+### Full motion pipeline (target_pose path — no VGN)
 ```bash
 source launch_env.bash
 ros2 launch moveit_isaac_bridge_pkg capstone_pick_pipeline.launch.py
@@ -127,9 +142,10 @@ ros_pkgs/src/
 ├── grounded_sam_pkg/       Slow Brain perception — GroundingDINO + SAM
 ├── qwen_pkg/               Slow Brain VLM — Qwen grounding + instruction input
 ├── mask_projection_pkg/    2D mask + depth → labeled 3D PointCloud2
-├── target_pose_bridge_pkg/ /world_map_result → MoveIt goal poses
+├── vgn_grasp_pkg/          Slow Brain grasp detection — TSDF + VGN inference
+├── target_pose_bridge_pkg/ /world_map_result → MoveIt goal poses (centroid-based)
 ├── moveit_isaac_bridge_pkg/MoveIt + Isaac Sim joint bridge
-└── behavior_tree/          BehaviorTree.ROS2 (vendored)
+└── behavior_tree/          BehaviorTree.ROS2 (vendored — do not modify)
 ```
 
 ### Full data flow (Slow Brain)
@@ -149,17 +165,22 @@ ros_pkgs/src/
     ├──► /qwen/grounding_result    (structured JSON: target_id, destination type+relation)
     └──► /qwen/mask_image          (pass-through — published LAST to trigger projector)
 
-/ee_camera/depth_image   →  multi_view_projector_node  →  /world_map        (PointCloud2)
+/ee_camera/depth_image   →  multi_view_projector_node  →  /world_map        (PointCloud2, labeled)
 /top_camera/depth_image  →                             →  /world_map_result (JSON centroid+bbox)
-/qwen/mask_image (trigger) →
+/qwen/mask_image (trigger) →                           →  /world_cloud_raw  (PointCloud2, unlabeled)
 
 /world_map_result  →  target_pose_bridge_node  →  /pre_grasp_target_pose (PoseStamped)
                                                →  /grasp_target_pose      (PoseStamped)
+
+                   →  vgn_grasp_node           →  /grasp_candidates (JSON, NMS filtered)
+                                               →  /grasp_markers    (MarkerArray, RViz)
 
 /grasp_target_pose  →  target_pose_executor_node  →  [/move_action]  →  MoveIt
 MoveIt  →  [/panda_arm_controller/follow_joint_trajectory]  →  joint_trajectory_bridge_node
         →  /joint_command  →  Isaac Sim
 ```
+
+**Grasp path choice**: `vgn_grasp_node` and `target_pose_bridge_node` both consume `/world_map_result`. VGN provides ranked grasp candidates with 6-DOF poses; `target_pose_bridge` provides a simple centroid-offset pose. Only one is used at execution time.
 
 ### Key design decisions
 
@@ -173,7 +194,9 @@ MoveIt  →  [/panda_arm_controller/follow_joint_trajectory]  →  joint_traject
 
 **`projection_engine.py` is ROS-free** — all numpy projection/filter math lives there. `multi_view_projector_node.py` only handles ROS message decode/encode. Keep it that way.
 
-**Point cloud categories** — `FREE=0` (EE non-detections), `TARGET=1`, `DESTINATION=2`, `OBSTACLE=3`, `UNKNOWN=4` (all Top-view points). When feeding octomap, use only `OBSTACLE + UNKNOWN`; `FREE` points cause background to be marked occupied.
+**Point cloud categories** — `FREE=0` (EE non-detections), `TARGET=1`, `DESTINATION=2`, `OBSTACLE=3`, `UNKNOWN=4` (all Top-view points). When feeding octomap, use only `OBSTACLE + UNKNOWN`; `FREE` points cause background to be marked occupied. Note: some docs/comments use `WORKSPACE` for category 2 — the authoritative name is `DESTINATION` (see `label_mapper.py`).
+
+**VGN filename convention** — `load_network()` parses the network type from the weight filename (`vgn_conv.pth` → `conv`). A misnamed file causes a `KeyError` at startup.
 
 ---
 
@@ -188,6 +211,7 @@ MoveIt  →  [/panda_arm_controller/follow_joint_trajectory]  →  joint_traject
 | `prompt_adapter.py` | Converts comma-separated input → GroundingDINO period-separated noun phrase |
 | `postprocess.py` | Raw detections → JSON-serializable list |
 | `visualizer.py` | Draws bboxes/masks onto BGR images |
+| `qwen_stub_node.py` | Stub replacement for `qwen_bridge_node` — no cluster needed |
 
 ### qwen_pkg internals
 
@@ -213,11 +237,32 @@ MoveIt  →  [/panda_arm_controller/follow_joint_trajectory]  →  joint_traject
 
 Two-pass filtering in `projection_engine.py`: Pass 1 removes Top UNKNOWN points within 1.5 cm XY + 10 cm Z of EE-segmented points (avoids double-counting). Pass 2 removes EE FREE points that overlap Top UNKNOWN (UNKNOWN > FREE priority).
 
+### vgn_grasp_pkg internals
+
+| Module | Role |
+|---|---|
+| `vgn_grasp_node.py` | Full pipeline: depth → signed TSDF (40×40×40) → VGN inference → NMS → semantic bbox filter → `/grasp_candidates` + `/grasp_markers` |
+
+External dependency: `external/vgn` git submodule (ethz-asl/vgn). Semantic filtering keeps only grasps whose centre falls inside the target `bbox_3d_world` from `/world_map_result`. The node does **not** subscribe to `/world_map` — that topic is RViz-only.
+
+Extrinsics convention: `p_world = R @ p_cam + t` (same as `camera_extrinsics.yaml`). K matrix comes from camera_info topics at runtime.
+
+Launch override examples:
+```bash
+ros2 launch vgn_grasp_pkg vgn_grasp.launch.py \
+  vgn_model_path:=/abs/path/to/vgn_conv.pth \
+  min_quality:=0.4 \
+  max_candidates:=3 \
+  use_top_depth:=false
+```
+
 ### Model weights (not in git)
 
 Place under `models/g-sam/` (paths in `ros_pkgs/src/grounded_sam_pkg/config/model_paths.yaml`):
 - `groundingdino_swint_ogc.pth` (~662 MB)
 - `sam_vit_b_01ec64.pth` (~375 MB)
+
+VGN weights: `models/vgn_conv.pth` (filename must follow `vgn_<network>.pth` convention)
 
 YOLO weights: `models/yolo26/`
 
@@ -233,3 +278,5 @@ Qwen FastAPI wrapper (cluster deploy): `models/qwen3.5/qwenapi.py` — fill in `
 | `isaac_ros_joint_bridge.py` | Wires Panda joint states/commands between Isaac Sim and ROS 2 |
 
 **Asset paths**: USD stage files live in `~/Downloads/XR_Content_NVD@10010/Assets/XR/Stages/` by default. Override with `ROBOT_CAPSTONE_XR_CONTENT_ROOT`. Downloaded GLBs default to `~/Downloads`; override with `ROBOT_CAPSTONE_DOWNLOADS_DIR`.
+
+**Camera extrinsics** (`config/camera_extrinsics.yaml`): extrinsics are captured at the robot's start pose. If the start pose changes, regenerate from Isaac Sim Script Editor by dumping `panda_link0`, `EEViewCamera`, and `TopViewCamera` world transforms, then converting from USD world into `panda_link0` frame. The conversion procedure is documented at the top of the YAML file.
