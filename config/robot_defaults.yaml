@@ -1,0 +1,59 @@
+# config/robot_defaults.yaml
+#
+# Master parameter defaults for the robot capstone system.
+# All launch files load this first; package YAMLs and inline dicts override
+# only what they need.  Loading order: defaults → pkg_yaml → inline_dict.
+#
+# Locate at runtime via $ROBOT_CAPSTONE_ROOT/config/robot_defaults.yaml
+# ($ROBOT_CAPSTONE_ROOT is set by launch_env.bash).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# COUPLING NOTE — max_grasp_candidates
+#   This single value controls both:
+#     • vgn_grasp_node  max_grasp_candidates  (VGN Top-K output count)
+#     • BT pick_and_place.xml  RetryUntilSuccessful num_attempts={max_grasp_candidates}
+#   Edit here; vgn_params.yaml and pick_and_place.xml both derive from it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+/**:
+  ros__parameters:
+
+    # ── TF / planning frames ─────────────────────────────────────────────────
+    robot_frame:        "panda_link0"   # VGN, projection — origin of robot coords
+    planning_frame:     "panda_link0"   # MoveIt — same as robot_frame
+    world_frame:        "world"         # RViz / MoveIt workspace root
+    planning_group:     "panda_arm"     # MoveIt planning group (7-DOF arm)
+    end_effector_link:  "panda_link8"   # TCP used for Cartesian goals
+
+    # ── Panda home ("ready") pose ─────────────────────────────────────────────
+    # Used by MoveToHome BT node; must match Isaac Sim start configuration.
+    home_joint_names:
+      - panda_joint1
+      - panda_joint2
+      - panda_joint3
+      - panda_joint4
+      - panda_joint5
+      - panda_joint6
+      - panda_joint7
+    home_joint_values:  [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
+
+    # ── Camera topics (Isaac Sim ROS 2 bridge defaults) ───────────────────────
+    ee_depth_topic:         "/ee_camera/depth_image"
+    ee_camera_info_topic:   "/ee_camera/camera_info"
+    top_depth_topic:        "/top_camera/depth_image"
+    top_camera_info_topic:  "/top_camera/camera_info"
+
+    # ── Camera extrinsics ─────────────────────────────────────────────────────
+    # Empty = package-internal default.  Override per-session:
+    #   extrinsics_config:=/abs/path/camera_extrinsics_isaac.yaml
+    extrinsics_config: ""
+
+    # ── YOLO class taxonomy (3-class Isaac Sim model) ─────────────────────────
+    #   0 = arm / person   1 = bottle   2 = box
+    class_allowlist:    [0, 1, 2]   # detections passed through the filter
+    halt_class_ids:     [0]         # classes that trigger E-stop (level 3)
+
+    # ── Grasp candidates (VGN ↔ BT coupling) ─────────────────────────────────
+    # vgn_grasp_node publishes at most this many candidates.
+    # BT RetryUntilSuccessful uses {max_grasp_candidates} as num_attempts.
+    max_grasp_candidates: 5

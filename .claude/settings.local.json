@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "mcp__github__get_me",
-      "Bash(git submodule:*)"
+      "Bash(git submodule:*)",
+      "Bash(git checkout *)",
+      "Bash(git merge *)",
+      "Bash(git push *)",
+      "Bash(git add *)"
     ]
   }
 }

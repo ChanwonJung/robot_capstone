@@ -69,7 +69,7 @@ class VgnGraspNode(Node):
         self.declare_parameter('tsdf_resolution',        40)
         self.declare_parameter('vgn_model_path',         'models/vgn_conv.pth')
         self.declare_parameter('min_quality',            0.5)
-        self.declare_parameter('max_candidates',         5)
+        self.declare_parameter('max_grasp_candidates',   5)
         self.declare_parameter('min_point_count',        50)
         self.declare_parameter('ee_depth_topic',         '/ee_camera/depth_image')
         self.declare_parameter('ee_camera_info_topic',   '/ee_camera/camera_info')
@@ -82,14 +82,14 @@ class VgnGraspNode(Node):
         self.declare_parameter('world_frame',            'world')
         self.declare_parameter('robot_frame',            'panda_link0')
 
-        self._roi_size_m  = self.get_parameter('roi_size_m').value
-        self._reso        = self.get_parameter('tsdf_resolution').value
-        self._min_quality = self.get_parameter('min_quality').value
-        self._max_k       = self.get_parameter('max_candidates').value
-        self._min_pts     = self.get_parameter('min_point_count').value
-        self._use_top     = self.get_parameter('use_top_depth').value
-        self._world_frame = self.get_parameter('world_frame').value
-        self._robot_frame = self.get_parameter('robot_frame').value
+        self._roi_size_m   = self.get_parameter('roi_size_m').value
+        self._reso         = self.get_parameter('tsdf_resolution').value
+        self._min_quality  = self.get_parameter('min_quality').value
+        self._max_k        = self.get_parameter('max_grasp_candidates').value
+        self._min_pts      = self.get_parameter('min_point_count').value
+        self._use_top      = self.get_parameter('use_top_depth').value
+        self._world_frame  = self.get_parameter('world_frame').value
+        self._robot_frame  = self.get_parameter('robot_frame').value
 
         # ── Extrinsics ────────────────────────────────────────────────────────
         ext_param = self.get_parameter('extrinsics_config').value or str(

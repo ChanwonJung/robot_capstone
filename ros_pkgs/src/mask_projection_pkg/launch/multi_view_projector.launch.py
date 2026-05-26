@@ -62,13 +62,26 @@ Launches multi_view_projector_node — two-camera world-frame PointCloud2 builde
   reads that mapping instead of using prompt-order assignment.
   No changes to this launch file are needed for that integration.
 """
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+def _robot_defaults() -> str:
+    root = os.environ.get(
+        "ROBOT_CAPSTONE_ROOT",
+        os.path.realpath(os.path.join(
+            get_package_share_directory("mask_projection_pkg"), *([".."] * 4))),
+    )
+    return os.path.join(root, "config", "robot_defaults.yaml")
+
+
 def generate_launch_description() -> LaunchDescription:
+    defaults = _robot_defaults()
 
     # ── declare all arguments ─────────────────────────────────────────────────
     args = [
@@ -125,21 +138,24 @@ def generate_launch_description() -> LaunchDescription:
         executable = 'multi_view_projector_node',
         name       = 'multi_view_projector_node',
         output     = 'screen',
-        parameters = [{
-            'top_depth_topic':       LaunchConfiguration('top_depth_topic'),
-            'top_camera_info_topic': LaunchConfiguration('top_camera_info_topic'),
-            'ee_depth_topic':        LaunchConfiguration('ee_depth_topic'),
-            'ee_camera_info_topic':  LaunchConfiguration('ee_camera_info_topic'),
-            'mask_topic':            LaunchConfiguration('mask_topic'),
-            'detections_topic':      LaunchConfiguration('detections_topic'),
-            'output_cloud_topic':     LaunchConfiguration('output_cloud_topic'),
-            'output_result_topic':    LaunchConfiguration('output_result_topic'),
-            'output_raw_cloud_topic': LaunchConfiguration('output_raw_cloud_topic'),
-            'min_depth':             LaunchConfiguration('min_depth'),
-            'max_depth':             LaunchConfiguration('max_depth'),
-            'initials':              LaunchConfiguration('initials'),
-            'extrinsics_config':     LaunchConfiguration('extrinsics_config'),
-        }],
+        parameters = [
+            defaults,
+            {
+                'top_depth_topic':        LaunchConfiguration('top_depth_topic'),
+                'top_camera_info_topic':  LaunchConfiguration('top_camera_info_topic'),
+                'ee_depth_topic':         LaunchConfiguration('ee_depth_topic'),
+                'ee_camera_info_topic':   LaunchConfiguration('ee_camera_info_topic'),
+                'mask_topic':             LaunchConfiguration('mask_topic'),
+                'detections_topic':       LaunchConfiguration('detections_topic'),
+                'output_cloud_topic':     LaunchConfiguration('output_cloud_topic'),
+                'output_result_topic':    LaunchConfiguration('output_result_topic'),
+                'output_raw_cloud_topic': LaunchConfiguration('output_raw_cloud_topic'),
+                'min_depth':              LaunchConfiguration('min_depth'),
+                'max_depth':              LaunchConfiguration('max_depth'),
+                'initials':               LaunchConfiguration('initials'),
+                'extrinsics_config':      LaunchConfiguration('extrinsics_config'),
+            },
+        ],
     )
 
     return LaunchDescription(args + [node])

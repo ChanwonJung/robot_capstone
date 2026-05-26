@@ -151,10 +151,18 @@ def generate_launch_description():
         parameters=[sim_time],
     )
 
-    pose_client = Node(
+    # NOTE: hybrid_pose_client_node is intentionally omitted here.
+    # The bt_pkg bt_executor_node now owns goal submission to /run_hybrid_planning
+    # via its MoveAction BT node. Running both would cause double goal submissions
+    # and hybrid planner thrash ("Unknown event" crashes).
+
+    # Gripper action server — serves /gripper_command (control_msgs/GripperCommand)
+    # for the BT's GripperAction node. Uses MoveIt panda_hand group + /joint_states
+    # contact detection.
+    gripper_server = Node(
         package="moveit_isaac_bridge_pkg",
-        executable="hybrid_pose_client_node",
-        name="hybrid_pose_client_node",
+        executable="gripper_action_server",
+        name="gripper_action_server",
         output="screen",
         parameters=[sim_time],
     )
@@ -188,7 +196,7 @@ def generate_launch_description():
             container,
             manager_load,
             command_bridge,
-            pose_client,
+            gripper_server,
             rviz_node,
         ]
     )

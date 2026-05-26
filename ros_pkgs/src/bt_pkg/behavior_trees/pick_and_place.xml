@@ -1,0 +1,120 @@
+<?xml version="1.0"?>
+<!--
+  pick_and_place.xml — Main behavior tree for the robot capstone pipeline.
+
+  Top-level structure:
+    RepeatForever wraps the whole pipeline so the robot waits for the next
+    command after each successful pick-and-place cycle.
+
+  E-Stop Guard (ReactiveSequence):
+    EmergencyStopClear is re-checked every 100 ms. If hazard_level >= 3
+    (arm/person detected by YOLO), the entire tree suspends.
+    Hazard levels 0-1 are handled by the hybrid planner and
+    hazard_collision_injector — the BT does not intervene.
+
+  Pick phase retry logic:
+    RetryUntilSuccessful reads num_attempts from the blackboard key
+    {max_grasp_candidates}, which bt_executor_node sets from the ROS parameter
+    max_grasp_candidates (default 5, defined in robot_defaults.yaml).
+    This is coupled to vgn_grasp_node's max_grasp_candidates so the retry
+    budget always equals the VGN candidate pool.
+    SelectGraspCandidate advances the candidate index on each call;
+    returning FAILURE when exhausted burns through remaining retry slots
+    cleanly. After all 5 attempts fail, Fallback escalates to Pick Recovery.
+
+  RequestReplan intentionally returns FAILURE to propagate failure through
+  Pick Recovery → Pick Fallback → Main Pipeline → RepeatForever re-ticks
+  from WaitForScene. This is a standard BT "restart" pattern.
+-->
+<root BTCPP_format="4">
+  <BehaviorTree ID="PickAndPlace">
+
+    <RepeatForever>
+      <ReactiveSequence name="E-Stop Guard">
+
+        <!-- Checked every 100 ms. FAILURE suspends the entire tree. -->
+        <EmergencyStopClear/>
+
+        <Sequence name="Main Pipeline">
+
+          <!-- Block until /world_map_result + /grasp_candidates arrive. -->
+          <WaitForScene/>
+
+          <!-- Parse both JSON topics into the blackboard. Resets grasp_index. -->
+          <ParseScene/>
+
+          <!-- ─── PICK PHASE ──────────────────────────────────────────── -->
+          <Fallback name="Pick or Recover">
+
+            <!--
+              TargetVisible is re-checked every tick by ReactiveSequence.
+              If the target disappears mid-motion the branch aborts and
+              Fallback escalates to Pick Recovery.
+            -->
+            <ReactiveSequence name="Visibility Guard">
+              <TargetVisible/>
+
+              <!--
+                Retries = max_grasp_candidates (from robot_defaults.yaml, default 5).
+                Each SelectGraspCandidate call advances the VGN candidate index,
+                so each retry tries the next-best grasp.
+              -->
+              <RetryUntilSuccessful num_attempts="{max_grasp_candidates}">
+                <Sequence name="Pick Attempt">
+                  <SelectGraspCandidate/>
+                  <MoveAction pose_key="pre_grasp_pose" speed="0.3"/>
+                  <MoveAction pose_key="grasp_pose"     speed="0.1"/>
+                  <GripperAction command="close"/>
+                  <MoveAction pose_key="retreat_pose"   speed="0.2"/>
+                </Sequence>
+              </RetryUntilSuccessful>
+
+            </ReactiveSequence>
+
+            <!--
+              Pick Recovery: target lost or all candidates exhausted.
+              MoveToHome returns the arm to a safe position.
+              RequestReplan publishes /bt/replan_request and returns FAILURE
+              to restart the pipeline from WaitForScene.
+            -->
+            <Sequence name="Pick Recovery">
+              <MoveToHome speed="0.5"/>
+              <RequestReplan/>
+            </Sequence>
+
+          </Fallback>
+
+          <!-- ─── DESTINATION UPDATE ─────────────────────────────────── -->
+          <!--
+            After the target is grasped, compute the place pose from:
+              - /qwen/grounding_result (destination_spec on blackboard)
+              - /yolo/world_map (live 3D positions of destination objects)
+            Falls back to initial /world_map_result centroid if YOLO has no match.
+          -->
+          <UpdateTargetPose/>
+
+          <!-- ─── PLACE PHASE ────────────────────────────────────────── -->
+          <Fallback name="Place or Recover">
+
+            <RetryUntilSuccessful num_attempts="3">
+              <Sequence name="Place Attempt">
+                <MoveAction pose_key="place_pose"   speed="0.3"/>
+                <GripperAction command="open"/>
+                <MoveAction pose_key="retreat_pose" speed="0.2"/>
+              </Sequence>
+            </RetryUntilSuccessful>
+
+            <!--
+              All place attempts failed while holding the object.
+              Return to home and await operator intervention.
+            -->
+            <MoveToHome speed="0.5"/>
+
+          </Fallback>
+
+        </Sequence>
+      </ReactiveSequence>
+    </RepeatForever>
+
+  </BehaviorTree>
+</root>

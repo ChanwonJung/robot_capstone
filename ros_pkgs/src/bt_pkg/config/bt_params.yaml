@@ -1,0 +1,64 @@
+bt_executor_node:
+  ros__parameters:
+    # Path to BT XML — defaults to package share dir at runtime
+    tree_file: ""
+
+    # MoveIt action servers
+    move_action:      "/run_hybrid_planning"
+    move_home_action: "/move_action"
+    gripper_action:   "/gripper_command"
+
+    # MoveIt planning tolerances
+    position_tolerance:    0.01   # m
+    orientation_tolerance: 0.05   # rad
+
+    # Approach and retreat heights above the grasp pose
+    pre_grasp_z_offset: 0.12  # m — lifted pose sent before descending to grasp
+    retreat_z_offset:   0.15  # m — lifted pose sent after grasping
+
+    # TargetVisible thresholds
+    target_search_radius_m: 0.25  # m — how far target can drift before considered lost
+    target_staleness_sec:   1.0   # s  — /yolo/target_centroid must arrive within this
+
+    # UpdateTargetPose — YOLO world map matching
+    dest_match_radius_m: 0.3   # m — max distance to match YOLO object to initial centroid
+
+    # Panda home tolerance (joint names + values come from robot_defaults.yaml)
+    home_joint_tolerance: 0.05  # rad
+
+    # Place pose geometry (destination_calculator.cpp)
+    side_offset_m:    0.08   # XY offset for left_of / right_of / in_front_of / behind
+    place_height_m:   0.05   # Z above destination centroid
+    container_drop_z: 0.03   # Z above container centroid
+    near_offset_m:    0.08   # XY offset for "near"
+
+
+hazard_level_translator_node:
+  ros__parameters:
+    # halt_class_ids comes from robot_defaults.yaml  (default: [0] = arm/person)
+    halt_conf_threshold:  0.6    # confidence required for halt
+    # Any other detection above this triggers level 1 (slow-down — handled by hybrid planner)
+    slow_conf_threshold:  0.5
+    # Seconds without a qualifying detection before level decays to 0
+    decay_sec:            0.3
+
+
+yolo_world_map_node:
+  ros__parameters:
+    # extrinsics_config, depth_topic, camera_info_topic come from robot_defaults.yaml
+
+    # YOLO topic to consume (top camera only — wide field of view)
+    detections_topic:   "/yolo_hazard/top/detections_json"
+
+    # Output
+    world_map_topic:    "/yolo/world_map"
+    target_centroid_topic: "/yolo/target_centroid"
+
+    # Throttle: publish at this rate regardless of YOLO input rate
+    publish_rate_hz:    10.0
+
+    # Depth sampling: NxN median window around bbox center
+    depth_sample_window: 5
+
+    # Proximity threshold for target tracking
+    target_search_radius_m: 0.2

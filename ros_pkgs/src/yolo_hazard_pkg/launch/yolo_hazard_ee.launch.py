@@ -22,10 +22,20 @@ def _venv_site_packages() -> str:
     return os.path.join(project_root, ".venv-yolo", "lib", "python3.12", "site-packages")
 
 
+def _robot_defaults() -> str:
+    root = os.environ.get(
+        "ROBOT_CAPSTONE_ROOT",
+        os.path.realpath(os.path.join(
+            get_package_share_directory("yolo_hazard_pkg"), *([".."] * 4))),
+    )
+    return os.path.join(root, "config", "robot_defaults.yaml")
+
+
 def generate_launch_description():
     share = get_package_share_directory("yolo_hazard_pkg")
-    model_config = os.path.join(share, "config", "model_paths.yaml")
+    model_config   = os.path.join(share, "config", "model_paths.yaml")
     runtime_config = os.path.join(share, "config", "runtime.yaml")
+    defaults       = _robot_defaults()
 
     pythonpath = _venv_site_packages() + os.pathsep + os.environ.get("PYTHONPATH", "")
 
@@ -37,6 +47,7 @@ def generate_launch_description():
             name="yolo_hazard_ee",
             output="screen",
             parameters=[
+                defaults,
                 runtime_config,
                 {
                     "model_config": model_config,
