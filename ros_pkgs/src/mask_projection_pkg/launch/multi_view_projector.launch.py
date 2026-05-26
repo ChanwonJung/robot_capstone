@@ -62,10 +62,22 @@ Launches multi_view_projector_node — two-camera world-frame PointCloud2 builde
   reads that mapping instead of using prompt-order assignment.
   No changes to this launch file are needed for that integration.
 """
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _robot_defaults() -> str:
+    root = os.environ.get(
+        "ROBOT_CAPSTONE_ROOT",
+        os.path.realpath(os.path.join(
+            get_package_share_directory("mask_projection_pkg"), *([".."] * 4))),
+    )
+    return os.path.join(root, "config", "robot_defaults.yaml")
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -120,12 +132,16 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('extrinsics_config', default_value=''),
     ]
 
+    defaults = _robot_defaults()
+
     node = Node(
         package    = 'mask_projection_pkg',
         executable = 'multi_view_projector_node',
         name       = 'multi_view_projector_node',
         output     = 'screen',
-        parameters = [{
+        parameters = [
+            defaults,
+            {
             'top_depth_topic':       LaunchConfiguration('top_depth_topic'),
             'top_camera_info_topic': LaunchConfiguration('top_camera_info_topic'),
             'ee_depth_topic':        LaunchConfiguration('ee_depth_topic'),
@@ -139,7 +155,8 @@ def generate_launch_description() -> LaunchDescription:
             'max_depth':             LaunchConfiguration('max_depth'),
             'initials':              LaunchConfiguration('initials'),
             'extrinsics_config':     LaunchConfiguration('extrinsics_config'),
-        }],
+        },
+        ],
     )
 
     return LaunchDescription(args + [node])

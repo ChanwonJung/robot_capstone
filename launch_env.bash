@@ -31,6 +31,7 @@ if [ ! -d "${VENV_SITE}" ]; then
 fi
 
 export PYTHONPATH="${VENV_SITE}:${PYTHONPATH}"
+export ROBOT_CAPSTONE_ROOT="${WS}"
 
 echo "[launch_env] ROS2 Jazzy + venv PYTHONPATH set"
 echo "  venv : ${VENV_SITE}"

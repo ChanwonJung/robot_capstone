@@ -2,6 +2,8 @@
 # Wildcard ('/**') applies these values to both yolo_hazard_top and yolo_hazard_ee.
 # Per-camera wiring (model_config, image_topic, detections_topic, annotated_topic)
 # stays in launch files. Touch this file to retune inference; touch launch to rewire.
+#
+# class_allowlist and halt_class_ids come from robot_defaults.yaml.
 
 /**:
   ros__parameters:
@@ -13,9 +15,8 @@
     half: true                # FP16 for Ampere+ GPUs
 
     # Class filter — only enforced when filter_by_class=true.
-    # v3 IsaacSim-native 3-class model: 0=arm, 1=bottle, 2=box.
+    # class_allowlist comes from robot_defaults.yaml (default: [0, 1, 2])
     filter_by_class: true
-    class_allowlist: [0, 1, 2]
 
     # Debug overlay topic — set false during FPS measurement (encode/publish overhead).
     publish_annotated: true

@@ -14,7 +14,7 @@ Prerequisites (must be running before this launch):
   • Isaac Sim / joint_trajectory_bridge → /joint_states, cameras, depth
 
 Usage:
-  ros2 launch bt_pkg bt_system.launch.py \
+  ros2 launch bt_pkg bt_system.launch.py \\
     extrinsics_config:=/abs/path/camera_extrinsics_isaac.yaml
 """
 
@@ -27,9 +27,20 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+def _robot_defaults() -> str:
+    """Return absolute path to config/robot_defaults.yaml at repo root."""
+    root = os.environ.get(
+        "ROBOT_CAPSTONE_ROOT",
+        os.path.realpath(os.path.join(
+            get_package_share_directory("bt_pkg"), *([".."] * 4))),
+    )
+    return os.path.join(root, "config", "robot_defaults.yaml")
+
+
 def generate_launch_description():
     pkg_share = get_package_share_directory("bt_pkg")
     params_file = os.path.join(pkg_share, "config", "bt_params.yaml")
+    defaults_file = _robot_defaults()
 
     # ── Launch arguments ────────────────────────────────────────────────────
     ext_arg = DeclareLaunchArgument(
@@ -53,7 +64,7 @@ def generate_launch_description():
         executable="hazard_level_translator_node.py",
         name="hazard_level_translator_node",
         output="screen",
-        parameters=[params_file],
+        parameters=[defaults_file, params_file],
     )
 
     # YOLO 3D tracker — feeds UpdateTargetPose and TargetVisible.
@@ -63,6 +74,7 @@ def generate_launch_description():
         name="yolo_world_map_node",
         output="screen",
         parameters=[
+            defaults_file,
             params_file,
             {"extrinsics_config": LaunchConfiguration("extrinsics_config")},
         ],
@@ -79,6 +91,7 @@ def generate_launch_description():
                 name="bt_executor_node",
                 output="screen",
                 parameters=[
+                    defaults_file,
                     params_file,
                     {"tree_file": LaunchConfiguration("tree_file")},
                 ],

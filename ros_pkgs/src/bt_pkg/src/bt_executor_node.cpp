@@ -168,6 +168,7 @@ int main(int argc, char** argv)
   auto gripper_srv     = node->declare_parameter<std::string>("gripper_action",  "/gripper_command");
 
   auto pos_tol         = node->declare_parameter<double>("position_tolerance",    0.01);
+  auto max_grasp_cands = node->declare_parameter<int>("max_grasp_candidates", 5);
   auto ori_tol         = node->declare_parameter<double>("orientation_tolerance", 0.05);
   auto pre_grasp_z     = node->declare_parameter<double>("pre_grasp_z_offset",    0.12);
   auto retreat_z       = node->declare_parameter<double>("retreat_z_offset",      0.15);
@@ -350,6 +351,11 @@ int main(int argc, char** argv)
   RCLCPP_INFO(node->get_logger(), "Loading BT from: %s", tree_file.c_str());
   auto tree = factory.createTreeFromFile(tree_file);
   RCLCPP_INFO(node->get_logger(), "BT loaded — ticking at 10 Hz");
+
+  // Seed blackboard with shared params so the XML can reference them as ports.
+  tree.rootBlackboard()->set<int>("max_grasp_candidates", max_grasp_cands);
+  RCLCPP_INFO(node->get_logger(),
+    "Blackboard: max_grasp_candidates=%d", max_grasp_cands);
 
   // ── Tick timer (10 Hz) ───────────────────────────────────────────────────
   auto tick_timer = node->create_wall_timer(

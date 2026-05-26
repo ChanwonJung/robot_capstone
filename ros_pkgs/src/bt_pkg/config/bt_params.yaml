@@ -8,10 +8,7 @@ bt_executor_node:
     move_home_action: "/move_action"
     gripper_action:   "/gripper_command"
 
-    # MoveIt planning parameters
-    planning_group:       "panda_arm"
-    end_effector_link:    "panda_link8"
-    planning_frame:       "panda_link0"
+    # MoveIt planning tolerances
     position_tolerance:    0.01   # m
     orientation_tolerance: 0.05   # rad
 
@@ -26,16 +23,7 @@ bt_executor_node:
     # UpdateTargetPose — YOLO world map matching
     dest_match_radius_m: 0.3   # m — max distance to match YOLO object to initial centroid
 
-    # Panda "ready" home state (used by MoveToHome)
-    home_joint_names:
-      - panda_joint1
-      - panda_joint2
-      - panda_joint3
-      - panda_joint4
-      - panda_joint5
-      - panda_joint6
-      - panda_joint7
-    home_joint_values: [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
+    # Panda home tolerance (joint names + values come from robot_defaults.yaml)
     home_joint_tolerance: 0.05  # rad
 
     # Place pose geometry (destination_calculator.cpp)
@@ -47,8 +35,7 @@ bt_executor_node:
 
 hazard_level_translator_node:
   ros__parameters:
-    # Class IDs that trigger a full emergency halt (level 3)
-    halt_class_ids:       [0]    # 0 = arm/person (YOLO Fast Brain classes)
+    # halt_class_ids comes from robot_defaults.yaml  (default: [0] = arm/person)
     halt_conf_threshold:  0.6    # confidence required for halt
     # Any other detection above this triggers level 1 (slow-down — handled by hybrid planner)
     slow_conf_threshold:  0.5
@@ -58,14 +45,10 @@ hazard_level_translator_node:
 
 yolo_world_map_node:
   ros__parameters:
-    # Path to camera extrinsics YAML (same format as mask_projection_pkg)
-    # Override at launch time: extrinsics_config:=/abs/path/camera_extrinsics_isaac.yaml
-    extrinsics_config: ""
+    # extrinsics_config, depth_topic, camera_info_topic come from robot_defaults.yaml
 
     # YOLO topic to consume (top camera only — wide field of view)
     detections_topic:   "/yolo_hazard/top/detections_json"
-    depth_topic:        "/top_camera/depth_image"
-    camera_info_topic:  "/top_camera/camera_info"
 
     # Output
     world_map_topic:    "/yolo/world_map"

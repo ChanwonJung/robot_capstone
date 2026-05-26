@@ -13,7 +13,11 @@
     hazard_collision_injector — the BT does not intervene.
 
   Pick phase retry logic:
-    RetryUntilSuccessful(num_attempts=5) matches VGN's max_candidates=5.
+    RetryUntilSuccessful reads num_attempts from the blackboard key
+    {max_grasp_candidates}, which bt_executor_node sets from the ROS parameter
+    max_grasp_candidates (default 5, defined in robot_defaults.yaml).
+    This is coupled to vgn_grasp_node's max_grasp_candidates so the retry
+    budget always equals the VGN candidate pool.
     SelectGraspCandidate advances the candidate index on each call;
     returning FAILURE when exhausted burns through remaining retry slots
     cleanly. After all 5 attempts fail, Fallback escalates to Pick Recovery.
@@ -51,10 +55,11 @@
               <TargetVisible/>
 
               <!--
-                Five retries: each SelectGraspCandidate call advances the VGN
-                candidate index, so each retry tries the next-best grasp.
+                Retries = max_grasp_candidates (from robot_defaults.yaml, default 5).
+                Each SelectGraspCandidate call advances the VGN candidate index,
+                so each retry tries the next-best grasp.
               -->
-              <RetryUntilSuccessful num_attempts="5">
+              <RetryUntilSuccessful num_attempts="{max_grasp_candidates}">
                 <Sequence name="Pick Attempt">
                   <SelectGraspCandidate/>
                   <MoveAction pose_key="pre_grasp_pose" speed="0.3"/>
