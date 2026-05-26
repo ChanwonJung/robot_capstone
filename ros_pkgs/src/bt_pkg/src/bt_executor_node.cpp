@@ -355,7 +355,7 @@ int main(int argc, char** argv)
   // Seed blackboard with shared params so the XML can reference them as ports.
   tree.rootBlackboard()->set<int>("max_grasp_candidates", max_grasp_cands);
   RCLCPP_INFO(node->get_logger(),
-    "Blackboard: max_grasp_candidates=%d", max_grasp_cands);
+    "Blackboard: max_grasp_candidates=%ld", max_grasp_cands);
 
   // ── Tick timer (10 Hz) ───────────────────────────────────────────────────
   auto tick_timer = node->create_wall_timer(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <string>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>

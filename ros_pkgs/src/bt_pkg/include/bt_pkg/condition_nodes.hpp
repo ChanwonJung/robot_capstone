@@ -6,6 +6,7 @@
 #include <behaviortree_cpp/condition_node.h>
 #include <behaviortree_cpp/bt_factory.h>
 #include <rclcpp/clock.hpp>
+#include <rclcpp/logging.hpp>
 
 #include "bt_pkg/scene_data.hpp"
 
