@@ -208,11 +208,19 @@ Extrinsics loaded from the same `camera_extrinsics_isaac.yaml` format as `mask_p
 
 ## Dependency: `behaviortree_ros2`
 
-The `behaviortree_ros2` ROS 2 wrapper is **vendored** at `ros_pkgs/src/behavior_tree/BehaviorTree.ROS2/` — already in the repo, do not modify. The underlying C++ library `behaviortree_cpp` (BT.cpp v4) is **not vendored** and must be installed:
+Two libraries are needed:
 
+| Library | Where |
+|---|---|
+| `behaviortree_ros2` | vendored at `ros_pkgs/src/behavior_tree/BehaviorTree.ROS2/` — do not modify |
+| `behaviortree_cpp` (BT.cpp v4 core) | git submodule at `ros_pkgs/src/BehaviorTree.CPP/` |
+
+After cloning the repo, initialise both:
 ```bash
-sudo apt install ros-jazzy-behaviortree-cpp
+git submodule update --init ros_pkgs/src/BehaviorTree.CPP
+sudo apt install -y libzmq3-dev libsqlite3-dev libtinyxml2-dev
 ```
+Then `colcon build` resolves and builds them in the correct order.
 
 ---
 

@@ -53,8 +53,10 @@ cp data/models/vgn_conv.pth models/vgn_conv.pth
 # Filename convention: vgn_<network>.pth — load_network() parses the second field.
 # Wrong filename → KeyError at startup.
 
-# 4. BT.cpp v4 core library (behaviortree_ros2 is vendored; behaviortree_cpp is not)
-sudo apt install ros-jazzy-behaviortree-cpp
+# 4. BT.cpp v4 core library — tracked as a git submodule, built by colcon
+git submodule update --init ros_pkgs/src/BehaviorTree.CPP
+# System deps required by BehaviorTree.CPP:
+sudo apt install -y libzmq3-dev libsqlite3-dev libtinyxml2-dev
 ```
 
 ### Per-session environment
