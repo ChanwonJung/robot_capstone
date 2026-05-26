@@ -15,8 +15,10 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
 LABEL_TO_CATEGORY: dict[str, str] = {
-    "cup":   "TARGET",
-    "table": "DESTINATION",
+    "cup":        "TARGET",
+    "glass cup":  "TARGET",
+    "mug":        "TARGET",
+    "table":      "DESTINATION",
 }
 
 
@@ -26,6 +28,7 @@ class QwenStubNode(Node):
         super().__init__("qwen_stub_node")
 
         self._latest_detections: list[dict] | None = None
+        self._pending_mask: Image | None = None
 
         # QoS depth=10 matches grounded_sam_node's VOLATILE publishers
         self.create_subscription(
@@ -45,12 +48,21 @@ class QwenStubNode(Node):
             self._latest_detections = json.loads(msg.data)
         except json.JSONDecodeError as e:
             self.get_logger().warn(f"detections_json parse error: {e}")
+            return
+        # mask가 detections_json보다 먼저 도착한 경우 (race condition) 즉시 처리
+        if self._pending_mask is not None:
+            self.get_logger().info("detections_json 도착 — 대기 중인 mask 처리")
+            self._process(self._pending_mask)
+            self._pending_mask = None
 
     def _mask_cb(self, mask_msg: Image) -> None:
         if self._latest_detections is None:
-            self.get_logger().warn("Waiting for detections_json...")
+            self._pending_mask = mask_msg
+            self.get_logger().warn("detections_json 미도착 — mask 캐시 후 대기")
             return
+        self._process(mask_msg)
 
+    def _process(self, mask_msg: Image) -> None:
         labeled = []
         for det in self._latest_detections:
             category = LABEL_TO_CATEGORY.get(
