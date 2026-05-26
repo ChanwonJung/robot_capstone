@@ -81,6 +81,7 @@ def _robot_defaults() -> str:
 
 
 def generate_launch_description() -> LaunchDescription:
+    defaults = _robot_defaults()
 
     # ── declare all arguments ─────────────────────────────────────────────────
     args = [
@@ -132,8 +133,6 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('extrinsics_config', default_value=''),
     ]
 
-    defaults = _robot_defaults()
-
     node = Node(
         package    = 'mask_projection_pkg',
         executable = 'multi_view_projector_node',
@@ -142,20 +141,20 @@ def generate_launch_description() -> LaunchDescription:
         parameters = [
             defaults,
             {
-            'top_depth_topic':       LaunchConfiguration('top_depth_topic'),
-            'top_camera_info_topic': LaunchConfiguration('top_camera_info_topic'),
-            'ee_depth_topic':        LaunchConfiguration('ee_depth_topic'),
-            'ee_camera_info_topic':  LaunchConfiguration('ee_camera_info_topic'),
-            'mask_topic':            LaunchConfiguration('mask_topic'),
-            'detections_topic':      LaunchConfiguration('detections_topic'),
-            'output_cloud_topic':     LaunchConfiguration('output_cloud_topic'),
-            'output_result_topic':    LaunchConfiguration('output_result_topic'),
-            'output_raw_cloud_topic': LaunchConfiguration('output_raw_cloud_topic'),
-            'min_depth':             LaunchConfiguration('min_depth'),
-            'max_depth':             LaunchConfiguration('max_depth'),
-            'initials':              LaunchConfiguration('initials'),
-            'extrinsics_config':     LaunchConfiguration('extrinsics_config'),
-        },
+                'top_depth_topic':        LaunchConfiguration('top_depth_topic'),
+                'top_camera_info_topic':  LaunchConfiguration('top_camera_info_topic'),
+                'ee_depth_topic':         LaunchConfiguration('ee_depth_topic'),
+                'ee_camera_info_topic':   LaunchConfiguration('ee_camera_info_topic'),
+                'mask_topic':             LaunchConfiguration('mask_topic'),
+                'detections_topic':       LaunchConfiguration('detections_topic'),
+                'output_cloud_topic':     LaunchConfiguration('output_cloud_topic'),
+                'output_result_topic':    LaunchConfiguration('output_result_topic'),
+                'output_raw_cloud_topic': LaunchConfiguration('output_raw_cloud_topic'),
+                'min_depth':              LaunchConfiguration('min_depth'),
+                'max_depth':              LaunchConfiguration('max_depth'),
+                'initials':               LaunchConfiguration('initials'),
+                'extrinsics_config':      LaunchConfiguration('extrinsics_config'),
+            },
         ],
     )
 
