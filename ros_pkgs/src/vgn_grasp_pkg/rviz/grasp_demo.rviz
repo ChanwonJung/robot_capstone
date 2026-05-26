@@ -4,10 +4,9 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /WorldMap1
+        - /TSDFDebug1
         - /GraspMarkers1
         - /EECamera1
-        - /GSAMAnnotated1
       Splitter Ratio: 0.38
     Tree Height: 780
   - Class: rviz_common/Views
@@ -36,12 +35,12 @@ Visualization Manager:
       Max Intensity: 4096
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: WorldMap
+      Name: TSDFDebug
       Position Transformer: XYZ
       Queue Size: 10
       Selectable: true
       Size (Pixels): 5
-      Size (m): 0.02
+      Size (m): 0.0075
       Style: Flat Squares
       Topic:
         Depth: 5
@@ -49,7 +48,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /world_map
+        Value: /tsdf_debug
       Unreliable: true
       Use Fixed Frame: true
       Use rainbow: false
@@ -86,23 +85,6 @@ Visualization Manager:
         Value: /ee_camera/image
       Unreliable: false
       Value: true
-    - Class: rviz_default_plugins/Image
-      Enabled: true
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: GSAMAnnotated
-      Normalize Range: true
-      Queue Size: 10
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /grounded_sam/annotated_image
-      Unreliable: false
-      Value: true
   Enabled: true
   Global Options:
     Background Color: 30; 30; 30
@@ -132,9 +114,9 @@ Visualization Manager:
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0
-        Y: 0
-        Z: 0
+        X: -3
+        Y: 2
+        Z: 1
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05
       Invert Z Axis: false
@@ -152,8 +134,6 @@ Window Geometry:
   Hide Left Dock: false
   Hide Right Dock: false
   EECamera:
-    collapsed: false
-  GSAMAnnotated:
     collapsed: false
   Width: 1400
   X: 0

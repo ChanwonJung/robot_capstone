@@ -13,6 +13,7 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/vgn_grasp.launch.py',
             'launch/full_pipeline.launch.py',
+            'launch/grasp_debug.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/vgn_params.yaml',
