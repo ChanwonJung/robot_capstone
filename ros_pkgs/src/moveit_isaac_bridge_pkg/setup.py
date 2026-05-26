@@ -46,6 +46,7 @@ setup(
             "hybrid_command_bridge_node = moveit_isaac_bridge_pkg.hybrid_command_bridge_node:main",
             "hybrid_pose_client_node = moveit_isaac_bridge_pkg.hybrid_pose_client_node:main",
             "joint_state_restamp_node = moveit_isaac_bridge_pkg.joint_state_restamp_node:main",
+            "gripper_action_server = moveit_isaac_bridge_pkg.gripper_action_server:main",
         ],
     },
 )

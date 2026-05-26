@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>bt_pkg</name>
+  <version>0.1.0</version>
+  <description>
+    Behavior tree executor for the robot capstone pick-and-place pipeline.
+    Coordinates Slow Brain perception outputs, VGN grasp candidates, MoveIt
+    hybrid planning, and gripper control via BehaviorTree.ROS2 (bt.cpp).
+  </description>
+  <maintainer email="jaewonheo1101@gmail.com">hj1</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- build tools -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- C++ BT core -->
+  <depend>behaviortree_ros2</depend>
+  <depend>behaviortree_cpp</depend>
+
+  <!-- ROS 2 C++ -->
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>ament_index_cpp</depend>
+
+  <!-- message / action types -->
+  <depend>moveit_msgs</depend>
+  <depend>control_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>shape_msgs</depend>
+  <depend>trajectory_msgs</depend>
+
+  <!-- transforms -->
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <!-- JSON parsing (apt: nlohmann-json3-dev) -->
+  <build_depend>nlohmann_json</build_depend>
+
+  <!-- Python companion nodes -->
+  <depend>rclpy</depend>
+  <depend>python3-numpy</depend>
+  <depend>python3-yaml</depend>
+
+  <!-- launch infra -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
