@@ -3,10 +3,10 @@
 # 사용법: source launch_env.bash
 #
 # 전제조건:
-#   1. python3 -m venv gsam_venv
-#   2. source gsam_venv/bin/activate
-#   3. pip install -r ros_pkgs/src/grounded_sam_pkg/requirements.txt
-
+#   1. python3 -m venv ${VENV_NAME}
+#   2. source ${VENV_NAME}/bin/activate
+#   3. pip install -r ros_pkgs/src/grounded_sam_pkg/requirements.txt --no-build-isolation
+    
 # resolve script dir in both bash (BASH_SOURCE) and zsh (ZSH_SCRIPT / $0)
 if [ -n "${BASH_SOURCE[0]}" ]; then
     WS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +31,6 @@ if [ ! -d "${VENV_SITE}" ]; then
 fi
 
 export PYTHONPATH="${VENV_SITE}:${PYTHONPATH}"
-export ROBOT_CAPSTONE_ROOT="${WS}"
 
 echo "[launch_env] ROS2 Jazzy + venv PYTHONPATH set"
 echo "  venv : ${VENV_SITE}"
