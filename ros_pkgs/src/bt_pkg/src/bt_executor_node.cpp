@@ -17,9 +17,11 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <fstream>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <behaviortree_cpp/bt_factory.h>
+#include <behaviortree_cpp/xml_parsing.h>
 #include <behaviortree_ros2/bt_action_node.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -356,7 +358,11 @@ int main(int argc, char** argv)
   tree.rootBlackboard()->set<int>("max_grasp_candidates", max_grasp_cands);
   RCLCPP_INFO(node->get_logger(),
     "Blackboard: max_grasp_candidates=%ld", max_grasp_cands);
-
+  
+  // Optional: write the tree structure to an XML file for visualization/debugging. (Groot2)
+  std::ofstream("/home/hj1/robot_capstone/ros_pkgs/src/bt_pkg/behavior_trees/bt_models.xml")
+    << BT::writeTreeNodesModelXML(factory);
+    
   // ── Tick timer (10 Hz) ───────────────────────────────────────────────────
   auto tick_timer = node->create_wall_timer(
     std::chrono::milliseconds(100),

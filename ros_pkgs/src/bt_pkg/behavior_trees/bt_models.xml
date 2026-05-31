@@ -1,0 +1,24 @@
+<root BTCPP_format="4">
+    <TreeNodesModel>
+        <Condition ID="EmergencyStopClear"/>
+        <Action ID="GripperAction">
+            <input_port name="command" type="std::string" default="close">"close" or "open"</input_port>
+            <input_port name="action_name" type="std::string" default="">Action server name</input_port>
+        </Action>
+        <Action ID="MoveAction">
+            <input_port name="pose_key" type="std::string" default="grasp_pose">Blackboard key for target PoseStamped</input_port>
+            <input_port name="speed" type="double" default="0.300000">max_velocity_scaling_factor</input_port>
+            <input_port name="action_name" type="std::string" default="">Action server name</input_port>
+        </Action>
+        <Action ID="MoveToHome">
+            <input_port name="speed" type="double" default="0.500000">max_velocity_scaling_factor</input_port>
+            <input_port name="action_name" type="std::string" default="">Action server name</input_port>
+        </Action>
+        <Action ID="ParseScene"/>
+        <Action ID="RequestReplan"/>
+        <Action ID="SelectGraspCandidate"/>
+        <Condition ID="TargetVisible"/>
+        <Action ID="UpdateTargetPose"/>
+        <Action ID="WaitForScene"/>
+    </TreeNodesModel>
+</root>
