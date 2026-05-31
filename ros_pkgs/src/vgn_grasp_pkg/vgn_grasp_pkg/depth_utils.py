@@ -22,6 +22,24 @@ def extract_K(msg) -> np.ndarray:
     return np.array(msg.k, dtype=np.float64).reshape(3, 3)
 
 
+def load_extrinsics_4cam(path: str) -> dict:
+    """Load all four camera extrinsics from camera_extrinsics_4cam.yaml.
+
+    Returns dict keyed by camera name, each value is {'R': (3,3), 't': (3,)}.
+    Expected keys: ee_camera, top_camera, right_camera, left_camera.
+    """
+    with open(path, 'r') as f:
+        cfg = yaml.safe_load(f)
+    result = {}
+    for name, vals in cfg.items():
+        R = np.array(vals['R'], dtype=np.float64)
+        t = np.array(vals['t'], dtype=np.float64)
+        assert R.shape == (3, 3) and t.shape == (3,), \
+            f'{name}: expected R(3,3) t(3,), got R{R.shape} t{t.shape}'
+        result[name] = {'R': R, 't': t}
+    return result
+
+
 def load_extrinsics(path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Load R_ee, t_ee, R_top, t_top from YAML.
 

@@ -44,9 +44,19 @@ def generate_launch_description() -> LaunchDescription:
             description='VGN grasp quality threshold',
         ),
         DeclareLaunchArgument(
-            'max_candidates',
+            'max_grasp_candidates',
             default_value='5',
             description='Top-K grasp candidates to publish',
+        ),
+        DeclareLaunchArgument(
+            'top_occlude_filter',
+            default_value='true',
+            description='TSDF top camera occlude filter',
+        ),
+        DeclareLaunchArgument(
+            'trunc_factor',
+            default_value='4.0',
+            description='TSDF truncation = trunc_factor × voxel_size',
         ),
         DeclareLaunchArgument(
             'process_once',
@@ -84,9 +94,11 @@ def generate_launch_description() -> LaunchDescription:
             os.path.join(pkg_vgn, 'launch', 'vgn_grasp.launch.py')
         ),
         launch_arguments={
-            'vgn_model_path': LaunchConfiguration('vgn_model_path'),
-            'min_quality':    LaunchConfiguration('min_quality'),
-            'max_candidates': LaunchConfiguration('max_candidates'),
+            'vgn_model_path':     LaunchConfiguration('vgn_model_path'),
+            'min_quality':        LaunchConfiguration('min_quality'),
+            'max_grasp_candidates': LaunchConfiguration('max_grasp_candidates'),
+            'top_occlude_filter': LaunchConfiguration('top_occlude_filter'),
+            'trunc_factor':       LaunchConfiguration('trunc_factor'),
         }.items(),
     )
 

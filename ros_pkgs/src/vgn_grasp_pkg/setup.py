@@ -12,7 +12,9 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', [
             'launch/vgn_grasp.launch.py',
+            'launch/vgn_grasp_4cam.launch.py',
             'launch/full_pipeline.launch.py',
+            'launch/full_pipeline_4cam.launch.py',
             'launch/grasp_debug.launch.py',
         ]),
         ('share/' + package_name + '/config', [
@@ -31,6 +33,7 @@ setup(
     entry_points={
         'console_scripts': [
             'vgn_grasp_node = vgn_grasp_pkg.vgn_grasp_node:main',
+            'vgn_grasp_4cam_node = vgn_grasp_pkg.vgn_grasp_4cam_node:main',
         ],
     },
 )

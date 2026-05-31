@@ -79,14 +79,17 @@ def build_tsdf_raycasting(
     top_K:      Optional[np.ndarray] = None,
     R_top:      Optional[np.ndarray] = None,
     t_top:      Optional[np.ndarray] = None,
+    top_occlude_filter: bool = True,
+    trunc_factor: float = 4.0,
 ) -> np.ndarray:
     """Build signed TSDF grid (1, reso, reso, reso) float32 via depth ray-casting.
 
     Each voxel accumulates signed TSDF values from all cameras with valid depth.
     Unobserved voxels default to 1.0 (outside/free).
+    EE camera is weighted 2×, Top camera 4× for better surface reconstruction.
     """
     voxel_size = roi_size_m / reso
-    trunc      = 4.0 * voxel_size
+    trunc      = trunc_factor * voxel_size
 
     idx_arr = np.arange(reso, dtype=np.float32)
     gi, gj, gk = np.meshgrid(idx_arr, idx_arr, idx_arr, indexing='ij')
@@ -96,14 +99,62 @@ def build_tsdf_raycasting(
     tsdf_sum = np.zeros(len(p_world), dtype=np.float64)
     weight   = np.zeros(len(p_world), dtype=np.float64)
 
-    def _integrate(depth, K, R, t, occlude_filter=False):
+    def _integrate(depth, K, R, t, occlude_filter=False, w=1.0):
         vals, valid = project_voxels(p_world, depth, K, R, t, trunc, occlude_filter)
-        tsdf_sum[valid] += vals[valid]
-        weight[valid]   += 1.0
+        tsdf_sum[valid] += vals[valid] * w
+        weight[valid]   += w
 
-    _integrate(ee_depth, ee_K, R_ee, t_ee)
+    _integrate(ee_depth, ee_K, R_ee, t_ee, occlude_filter=True, w=2.0)
     if top_depth is not None and top_K is not None and R_top is not None and t_top is not None:
-        _integrate(top_depth, top_K, R_top, t_top, occlude_filter=True)
+        _integrate(top_depth, top_K, R_top, t_top, occlude_filter=top_occlude_filter, w=4.0)
+
+    result = np.ones(len(p_world), dtype=np.float32)
+    obs = weight > 0
+    result[obs] = (tsdf_sum[obs] / weight[obs]).astype(np.float32)
+    return result.reshape(1, reso, reso, reso)
+
+
+def build_tsdf_ncam(
+    roi_min:    np.ndarray,
+    roi_size_m: float,
+    reso:       int,
+    cameras:    list,
+    trunc_factor: float = 4.0,
+    z_min:      float = -np.inf,
+) -> np.ndarray:
+    """Build signed TSDF grid from N cameras.
+
+    cameras: list of dicts, each with keys:
+      depth  (np.ndarray H×W float32)
+      K      (np.ndarray 3×3 float64)
+      R      (np.ndarray 3×3 float64)
+      t      (np.ndarray (3,) float64)
+      weight (float, default 1.0)
+      occlude_filter (bool, default False) — set True for top-down cameras
+
+    z_min: world-frame Z floor (table top z). Voxels below this height are
+      skipped during integration and remain at default 1.0 (free/outside).
+    """
+    voxel_size = roi_size_m / reso
+    trunc      = trunc_factor * voxel_size
+
+    idx_arr = np.arange(reso, dtype=np.float32)
+    gi, gj, gk = np.meshgrid(idx_arr, idx_arr, idx_arr, indexing='ij')
+    p_world = ((np.stack([gi, gj, gk], axis=-1) + 0.5) * voxel_size
+               + roi_min).reshape(-1, 3)
+
+    above    = p_world[:, 2] >= z_min
+    tsdf_sum = np.zeros(len(p_world), dtype=np.float64)
+    weight   = np.zeros(len(p_world), dtype=np.float64)
+
+    for cam in cameras:
+        w   = float(cam.get('weight', 1.0))
+        occ = bool(cam.get('occlude_filter', False))
+        vals, valid = project_voxels(
+            p_world, cam['depth'], cam['K'], cam['R'], cam['t'], trunc, occ)
+        valid_above = valid & above
+        tsdf_sum[valid_above] += vals[valid_above] * w
+        weight[valid_above]   += w
 
     result = np.ones(len(p_world), dtype=np.float32)
     obs = weight > 0

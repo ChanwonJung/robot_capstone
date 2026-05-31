@@ -58,6 +58,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('grasp_candidates_topic', default_value='/grasp_candidates'),
         DeclareLaunchArgument('extrinsics_config',      default_value=''),
         DeclareLaunchArgument('use_top_depth',          default_value='true'),
+        DeclareLaunchArgument('top_occlude_filter',     default_value='true'),
+        DeclareLaunchArgument('trunc_factor',           default_value='4.0'),
         DeclareLaunchArgument('world_frame',            default_value='world'),
         DeclareLaunchArgument('robot_frame',            default_value='panda_link0'),
     ]
@@ -85,6 +87,8 @@ def generate_launch_description() -> LaunchDescription:
                 'grasp_candidates_topic': LaunchConfiguration('grasp_candidates_topic'),
                 'extrinsics_config':      LaunchConfiguration('extrinsics_config'),
                 'use_top_depth':          LaunchConfiguration('use_top_depth'),
+                'top_occlude_filter':     LaunchConfiguration('top_occlude_filter'),
+                'trunc_factor':           LaunchConfiguration('trunc_factor'),
                 'world_frame':            LaunchConfiguration('world_frame'),
                 'robot_frame':            LaunchConfiguration('robot_frame'),
             },
