@@ -34,6 +34,7 @@ setup(
             'grounded_sam_node = grounded_sam_pkg.ros_node:main',
             'test_image_pub = grounded_sam_pkg.test_image_pub:main',
             'qwen_stub_node = grounded_sam_pkg.qwen_stub_node:main',
+            'instruction_parser_node = grounded_sam_pkg.instruction_parser_node:main',
         ],
     },
 )

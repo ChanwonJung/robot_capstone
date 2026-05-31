@@ -149,6 +149,8 @@ class GroundedSAMNode(Node):
         self._frame_counter = 0
         self._last_process_time = 0.0
 
+        self.create_subscription(String, "/dino_prompt", self._dino_prompt_cb, 10)
+
         self.get_logger().info(
             f"Ready — EE='{image_topic}' prompt='{self.prompt_raw}'"
             + (f", Top='{top_image_topic}' prompt='{self._top_prompt_raw}'"
@@ -161,6 +163,15 @@ class GroundedSAMNode(Node):
         )
 
     # ── callbacks ─────────────────────────────────────────────────────────────
+
+    def _dino_prompt_cb(self, msg: String) -> None:
+        new_prompt = msg.data.strip()
+        if not new_prompt:
+            self.get_logger().warn("/dino_prompt 빈 메시지 무시")
+            return
+        self.prompt_raw = new_prompt
+        self._top_prompt_raw = new_prompt
+        self.get_logger().info(f"Prompt updated: '{new_prompt}'")
 
     def _top_image_callback(self, msg: Image) -> None:
         # Top images are cached; processing is driven by the EE callback so
