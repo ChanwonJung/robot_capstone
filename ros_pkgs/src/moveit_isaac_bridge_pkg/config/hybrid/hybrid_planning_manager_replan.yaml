@@ -1,0 +1,23 @@
+# Hybrid Planning Manager logic — REPLAN variant (Phase 2b: avoidance).
+#
+# ReplanInvalidatedTrajectory: when the local planner reports COLLISION_AHEAD
+# (i.e. stop_before_collision halts the arm at a blocked reference trajectory),
+# the manager re-plans the GLOBAL trajectory from the current robot state. The
+# global planner's PSM also subscribes to /collision_object (verified: both
+# global_planner and local_planner private nodes subscribe), so the injected
+# hazard is in its scene and OMPL routes AROUND it — the arm continues to the
+# goal instead of just waiting.
+#
+# Behaviour split (selected by the manager_logic launch arg):
+#   stop_resume -> hybrid_planning_manager.yaml       (SinglePlanExecution)
+#                  transient hazard: halt in place, resume when it clears.
+#   replan      -> THIS FILE                           (ReplanInvalidatedTrajectory)
+#                  persistent hazard parked in the path: re-plan around it.
+#
+# Implicit grace period = global re-planning latency. A fast transient hazard
+# often clears before/while OMPL re-plans, so the new global solution ≈ the old
+# path (effectively stop+resume). A persistent hazard is still there at re-plan
+# time, so OMPL detours. If OMPL cannot find a path around (hazard fully blocks
+# the only route), the arm holds and may eventually hit ForwardTrajectory's
+# stuck-abort — keep the injected box conservative (see hazard injector params).
+planner_logic_plugin_name: "moveit_hybrid_planning/ReplanInvalidatedTrajectory"

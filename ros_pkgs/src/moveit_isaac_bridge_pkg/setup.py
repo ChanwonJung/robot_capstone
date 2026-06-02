@@ -19,6 +19,7 @@ setup(
             "config/hybrid/global_planner.yaml",
             "config/hybrid/local_planner.yaml",
             "config/hybrid/hybrid_planning_manager.yaml",
+            "config/hybrid/hybrid_planning_manager_replan.yaml",
         ]),
         ("share/" + package_name + "/launch", [
             "launch/joint_trajectory_bridge.launch.py",

@@ -1,29 +1,39 @@
-"""Hybrid planning bring-up for the stop+resume avoidance demo (Phase 2a).
+"""Hybrid planning bring-up for the stop+resume / avoidance demo.
 
 Runs the MoveIt hybrid planning components (global + local + manager) wired to
 Isaac Sim via a Float64MultiArray->/joint_command adapter. The local planner
 subscribes to /collision_object (fed by hazard_collision_injector_node), so the
-arm stops when the flying bottle blocks its path and resumes once it passes.
+arm reacts when a hazard blocks its path.
+
+Manager logic is selectable via the manager_logic launch arg:
+  stop_resume (default) -- SinglePlanExecution: halt in place on a collision and
+                           resume once it clears (transient hazard, e.g. a flying
+                           bottle).
+  replan                -- ReplanInvalidatedTrajectory: on a collision, re-plan
+                           the global trajectory from the current state so OMPL
+                           routes AROUND a persistent hazard (e.g. an arm parked
+                           in the EE path). Relies on the global planner's PSM
+                           also seeing /collision_object (it does — both the
+                           global and local planner private nodes subscribe).
 
 This REPLACES panda_isaac_moveit (do not run both — they would both drive the
 planning scene). Run alongside:
   - Isaac Sim scene (/joint_states, /joint_command, cameras, depth, the bottle)
   - YOLO top hazard node + hazard_collision_injector_node
   - a goal source publishing PoseStamped on /grasp_target_pose
-    (e.g. hybrid_pose_client_node, included here)
+    (the bt_pkg BT owns goal submission to /run_hybrid_planning)
 
 Components:
   global_planner / local_planner / hybrid_planning_manager  (composable container)
   robot_state_publisher, static_tf (world->panda_link0), RViz
   hybrid_command_bridge_node  (local planner output -> Isaac /joint_command)
-  hybrid_pose_client_node     (PoseStamped -> HybridPlanner action)
 """
 import os
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
@@ -41,9 +51,55 @@ def _load_yaml(package_name, file_path):
         return None
 
 
+def _manager_setup(context, *args, **kwargs):
+    """Load the Hybrid Planning Manager with the logic plugin chosen at runtime.
+
+    manager_logic:=stop_resume -> hybrid_planning_manager.yaml
+                                  (SinglePlanExecution: halt + resume)
+    manager_logic:=replan      -> hybrid_planning_manager_replan.yaml
+                                  (ReplanInvalidatedTrajectory: re-plan around)
+
+    The manager connects to the global/local planner action servers during its
+    own init, so it must load AFTER they are up — otherwise it aborts with
+    "Global planner action server not available after waiting". Hence the 8 s
+    delay before loading it into the (already running) container.
+    """
+    logic = LaunchConfiguration("manager_logic").perform(context)
+    fname = (
+        "config/hybrid/hybrid_planning_manager_replan.yaml"
+        if logic == "replan"
+        else "config/hybrid/hybrid_planning_manager.yaml"
+    )
+    manager_param = _load_yaml("moveit_isaac_bridge_pkg", fname)
+    manager_node = ComposableNode(
+        package="moveit_hybrid_planning",
+        plugin="moveit::hybrid_planning::HybridPlanningManager",
+        name="hybrid_planning_manager",
+        parameters=[manager_param, {"use_sim_time": False}],
+    )
+    return [
+        TimerAction(
+            period=8.0,
+            actions=[
+                LoadComposableNodes(
+                    target_container="/hybrid_planning_container",
+                    composable_node_descriptions=[manager_node],
+                )
+            ],
+        )
+    ]
+
+
 def generate_launch_description():
     start_rviz_arg = DeclareLaunchArgument("start_rviz", default_value="true")
     rviz_config_arg = DeclareLaunchArgument("rviz_config", default_value="moveit.rviz")
+    manager_logic_arg = DeclareLaunchArgument(
+        "manager_logic",
+        default_value="stop_resume",
+        choices=["stop_resume", "replan"],
+        description="Hybrid manager logic: 'stop_resume' (halt + resume) or "
+        "'replan' (re-plan around a persistent hazard).",
+    )
 
     bridge_pkg_share = get_package_share_directory("moveit_isaac_bridge_pkg")
     moveit_controllers = os.path.join(bridge_pkg_share, "config", "moveit_controllers.yaml")
@@ -68,7 +124,6 @@ def generate_launch_description():
 
     global_planner_param = _load_yaml("moveit_isaac_bridge_pkg", "config/hybrid/global_planner.yaml")
     local_planner_param = _load_yaml("moveit_isaac_bridge_pkg", "config/hybrid/local_planner.yaml")
-    manager_param = _load_yaml("moveit_isaac_bridge_pkg", "config/hybrid/hybrid_planning_manager.yaml")
     # Isaac in this scene does NOT publish /clock, so the whole stack runs on wall
     # time. use_sim_time:True would (a) crash the composable container on the
     # /clock subscription QoS override and (b) stall every node at time 0.
@@ -89,12 +144,6 @@ def generate_launch_description():
         name="local_planner",
         parameters=[local_planner_param, moveit_config.to_dict(), sim_time],
     )
-    manager_node = ComposableNode(
-        package="moveit_hybrid_planning",
-        plugin="moveit::hybrid_planning::HybridPlanningManager",
-        name="hybrid_planning_manager",
-        parameters=[manager_param, sim_time],
-    )
 
     container = ComposableNodeContainer(
         name="hybrid_planning_container",
@@ -103,19 +152,6 @@ def generate_launch_description():
         executable="component_container_mt",
         composable_node_descriptions=[global_planner_node, local_planner_node],
         output="screen",
-    )
-
-    # The manager connects to the global/local planner action servers during its
-    # own init, so it must load AFTER they are up — otherwise it aborts with
-    # "Global planner action server not available after waiting". Delay its load.
-    manager_load = TimerAction(
-        period=8.0,
-        actions=[
-            LoadComposableNodes(
-                target_container="/hybrid_planning_container",
-                composable_node_descriptions=[manager_node],
-            )
-        ],
     )
 
     static_tf_node = Node(
@@ -190,11 +226,12 @@ def generate_launch_description():
         [
             start_rviz_arg,
             rviz_config_arg,
+            manager_logic_arg,
             static_tf_node,
             restamp_node,
             robot_state_publisher,
             container,
-            manager_load,
+            OpaqueFunction(function=_manager_setup),
             command_bridge,
             gripper_server,
             rviz_node,
