@@ -97,10 +97,27 @@ class HazardCollisionInjectorNode(Node):
         ext_path = str(self.get_parameter("extrinsics_config").value)
         self._R, self._t = self._load_extrinsics(ext_path, self._ext_key)
 
+        # Republish-skip threshold: don't re-publish a CollisionObject when
+        # its new box center has drifted less than this from the previously
+        # published one (per object id). Default 1 cm — absorbs YOLO mask
+        # pixel jitter (typically ±1-2 px → ±5-10 mm in world) so the
+        # planning scene's box position is STABLE while the hazard sits
+        # still. Critical for the replan demo: if the box jitters between
+        # what local sees (when it decides to hold) and what the global
+        # CheckStartStateCollision adapter sees (a few ms later), the arm
+        # appears to drift in/out of contact and the manager double-aborts.
+        self.declare_parameter("stable_position_threshold", 0.01)
+        self._stable_thresh = float(
+            self.get_parameter("stable_position_threshold").value)
+
         self._depth_msg: Optional[Image] = None
         self._K: Optional[np.ndarray] = None
         # id -> last-seen monotonic seconds
         self._active: Dict[str, float] = {}
+        # id -> last-published (cx, cy, cz, dx, dy) tuple. Drives the
+        # stability filter above. cz is the box CENTER z (= top_z - dz/2).
+        # dz is constant per session so we don't need to store it.
+        self._last_box: Dict[str, tuple] = {}
 
         self._co_pub = self.create_publisher(CollisionObject, self._co_topic, 10)
         self.create_subscription(Image, self._depth_topic, self._depth_cb, 10)
@@ -232,6 +249,24 @@ class HazardCollisionInjectorNode(Node):
         cx = float(lo[0] + hi[0]) / 2.0
         cy = float(lo[1] + hi[1]) / 2.0
         top_z = float(hi[2])
+        cz = top_z - dz / 2.0
+
+        # Stability filter — skip republish when the new box is essentially
+        # the same as the last one. Keeps the planning scene quiescent so
+        # the local stop position and the global CheckStartStateCollision
+        # adapter see the SAME box geometry, instead of one whose XYZ jitters
+        # by a few mm between consecutive frames.
+        prev = self._last_box.get(obj_id)
+        if prev is not None:
+            pcx, pcy, pcz, pdx, pdy = prev
+            pos_drift = max(abs(cx - pcx), abs(cy - pcy), abs(cz - pcz))
+            size_drift = max(abs(dx - pdx), abs(dy - pdy))
+            if pos_drift < self._stable_thresh and size_drift < self._stable_thresh:
+                # Refresh staleness so _cleanup_stale doesn't remove the
+                # still-detected object just because we skipped a publish.
+                self._active[obj_id] = self._now_sec()
+                return
+        self._last_box[obj_id] = (cx, cy, cz, dx, dy)
 
         box = SolidPrimitive()
         box.type = SolidPrimitive.BOX
@@ -240,7 +275,7 @@ class HazardCollisionInjectorNode(Node):
         pose = Pose()
         pose.position.x = cx
         pose.position.y = cy
-        pose.position.z = top_z - dz / 2.0
+        pose.position.z = cz
         pose.orientation.w = 1.0
 
         co = CollisionObject()
@@ -262,6 +297,9 @@ class HazardCollisionInjectorNode(Node):
             co.id = oid
             co.operation = CollisionObject.REMOVE
             self._co_pub.publish(co)
+            # Drop the cached box so a re-appearance gets a fresh ADD
+            # (otherwise the stability filter would skip the new publish).
+            self._last_box.pop(oid, None)
             del self._active[oid]
             self.get_logger().info(f"Hazard '{oid}' cleared — removed from planning scene")
 

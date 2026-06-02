@@ -1,7 +1,9 @@
 bt_executor_node:
   ros__parameters:
-    # Path to BT XML — defaults to package share dir at runtime
-    tree_file: ""
+    # tree_file is intentionally NOT set here — keep it on the launch arg path.
+    # ROS 2 resolves "bt_executor_node:" (specific) ahead of "/**:" (wildcard),
+    # so a default "" in this file silently overrides launch-arg overrides
+    # passed via parameters dict (which land under /**). Leave it to the launch.
 
     # MoveIt action servers
     move_action:      "/run_hybrid_planning"

@@ -37,16 +37,29 @@ echo "[launch_env] ROS2 Jazzy + venv PYTHONPATH set"
 echo "  venv : ${VENV_SITE}"
 
 # ── SSH tunnel: aurora-g6 vLLM → localhost:8000 ───────────────────────────────
-_TUNNEL_USER="jaewonheo1101"
-_JUMP_HOST="aurora.khu.ac.kr"
-_TARGET_HOST="aurora-g6"
-_LOCAL_PORT=8000
+# Only needed when calling the REAL Qwen VLM on Seraph. The stub path
+# (qwen_stub_node) and the C++/perception terminals do not use it. Skip with:
+#   source launch_env.bash --no-tunnel
+#   SKIP_QWEN_TUNNEL=1 source launch_env.bash
+_SKIP_TUNNEL="${SKIP_QWEN_TUNNEL:-0}"
+for _arg in "$@"; do
+    [ "${_arg}" = "--no-tunnel" ] && _SKIP_TUNNEL=1
+done
 
-if lsof -ti tcp:${_LOCAL_PORT} &>/dev/null; then
-    echo "[launch_env] Seraph ssh tunnel to localhost already established"
+if [ "${_SKIP_TUNNEL}" = "1" ]; then
+    echo "[launch_env] Qwen SSH tunnel skipped (--no-tunnel / SKIP_QWEN_TUNNEL=1)"
 else
-    ssh -fN -L ${_LOCAL_PORT}:${_TARGET_HOST}:${_LOCAL_PORT} \
-        -J ${_TUNNEL_USER}@${_JUMP_HOST}:30080 \
-        ${_TUNNEL_USER}@${_TARGET_HOST}
-    echo "[launch_env] Seraph ssh tunnel to localhost established"
+    _TUNNEL_USER="jaewonheo1101"
+    _JUMP_HOST="aurora.khu.ac.kr"
+    _TARGET_HOST="aurora-g6"
+    _LOCAL_PORT=8000
+
+    if lsof -ti tcp:${_LOCAL_PORT} &>/dev/null; then
+        echo "[launch_env] Seraph ssh tunnel to localhost already established"
+    else
+        ssh -fN -L ${_LOCAL_PORT}:${_TARGET_HOST}:${_LOCAL_PORT} \
+            -J ${_TUNNEL_USER}@${_JUMP_HOST}:30080 \
+            ${_TUNNEL_USER}@${_TARGET_HOST}
+        echo "[launch_env] Seraph ssh tunnel to localhost established"
+    fi
 fi

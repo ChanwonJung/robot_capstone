@@ -6,4 +6,4 @@
 # - .engine = TensorRT FP16 (fast, GPU/driver-specific — rebuild per machine).
 #   .pt = portable PyTorch fallback (slower, works on any GPU). Swap the suffix
 #   here to fall back if the engine fails to load on a different node.
-weights: "models/yolo26/release/capstone-hazard-seg-best.engine"
+weights: "models/yolo26/release/capstone-hazard-seg-best.pt"

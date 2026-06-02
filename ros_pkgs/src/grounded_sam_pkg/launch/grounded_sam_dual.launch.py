@@ -17,9 +17,9 @@ min_process_interval_sec defaults to 10.0 s (Slow Brain pacing — slower than
 the single-view EE launch). Override at the command line if needed.
 """
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -28,12 +28,17 @@ def generate_launch_description():
         [FindPackageShare("grounded_sam_pkg"), "launch", "grounded_sam.launch.py"]
     )
 
+    # EE-view 탐지 프롬프트. 투명 유리컵은 depth가 불안정해 centroid가 튀므로,
+    # 불투명 물체(red ball / apple / book)로 덮어쓰기:  prompt:="red ball"
+    prompt_arg = DeclareLaunchArgument("prompt", default_value="glass cup")
+
     return LaunchDescription(
         [
+            prompt_arg,
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(grounded_sam_launch),
                 launch_arguments={
-                    "prompt": "glass cup",
+                    "prompt": LaunchConfiguration("prompt"),
                     # EE view (primary trigger)
                     "image_topic": "/ee_camera/image_raw",
                     "annotated_topic": "/grounded_sam/annotated_image",

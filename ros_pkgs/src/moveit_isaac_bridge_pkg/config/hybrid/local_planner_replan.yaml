@@ -1,0 +1,42 @@
+# Local planner — REPLAN variant.
+#
+# Higher local_planning_frequency than the stop+resume profile so the
+# reactive layer detects an injected collision_object and brakes the arm
+# while the start state can still be planned-from. At 2 Hz the global
+# replan request fires with the arm already inside the bottle's collision
+# volume; OMPL CheckStartStateCollision then fails and the manager's
+# error-handling races into a SIGABRT.
+#
+# Why this can be aggressive here but not in stop+resume:
+#   ForwardTrajectory aborts after N hard-coded "stuck" iterations while
+#   holding at a collision. Hold time = N / frequency. The stop+resume
+#   profile wants a LONG hold (transient bottle has to cross under the
+#   arm before it aborts), so it runs slow. In replan mode the manager
+#   re-plans within a few hundred ms, so a SHORT hold is acceptable — the
+#   arm doesn't have to wait for the hazard to clear, only for the new
+#   global trajectory to arrive.
+robot_description: "robot_description"
+trajectory_operator_plugin_name: "moveit_hybrid_planning/SimpleSampler"
+local_constraint_solver_plugin_name: "moveit_hybrid_planning/ForwardTrajectory"
+# Tuned to keep hold time > global planning_time so the local doesn't
+# self-abort while the global is computing the detour. ForwardTrajectory
+# aborts after a HARD-CODED number of "stuck" iterations; hold time =
+# stuck_iters / frequency. With stuck_iters ≈ 20 and frequency 3 Hz, the
+# arm holds for ~6.7 s — enough for global to finish (its planning_time
+# is clamped to 2 s in global_planner.yaml) AND for the new trajectory to
+# be delivered to local without local having torn down its goal handle.
+local_planning_frequency: 3.0
+global_solution_topic: "global_trajectory"
+
+local_solution_topic: "/hybrid/joint_position_command"
+local_solution_topic_type: "std_msgs/Float64MultiArray"
+publish_joint_positions: true
+publish_joint_velocities: false
+
+group_name: "panda_arm"
+
+monitored_planning_scene: "/planning_scene"
+collision_object_topic: "/collision_object"
+joint_states_topic: "/joint_states"
+
+stop_before_collision: true
