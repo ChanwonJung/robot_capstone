@@ -87,7 +87,13 @@ HAZARD_BOX_ROTATION_DEG = np.array([0.0, 0.0, 30.0])
 # native ≈ 0.51 m × 0.30 = 0.15 m box at scale=0.003.
 HAZARD_BOX_SCALE = np.array([0.003, 0.003, 0.003])
 HAZARD_BOX_FALLBACK_SIZE = np.array([0.14, 0.14, 0.14])
-HAZARD_BOX_LINEAR_VELOCITY = np.array([-0.4, 0.0, 0.0])
+# Box flight speed at /hazard/launch_bottle trigger. Override via
+# ROBOT_CAPSTONE_BOX_VX when paired with HAZARD_OBJECT=box for the
+# transient stop+resume demo (faster crossing = cleaner flythrough).
+HAZARD_BOX_LINEAR_VELOCITY = np.array([
+    float(os.environ.get("ROBOT_CAPSTONE_BOX_VX", "-0.4")),
+    0.0, 0.0,
+])
 
 # pet_bottle hazard. Uses real PET USD captured into the v3 dataset so train
 # and inference share the same render. Spawn / velocity mirror HazardBox so
@@ -101,7 +107,14 @@ HAZARD_BOTTLE_ASSET = (
 # enters the workspace ~0.5 s after the launch trigger (fired when the arm starts).
 # Appears-in-FOV delay ≈ (x - 0.7) / |velocity| s. Pull toward 0.78 to appear even
 # sooner, push out for later. (Stay under the stage wall that blocked 4.5+.)
-HAZARD_BOTTLE_TRANSLATE = np.array([0.85, -0.09, 0.35])
+# Y / Z are env-controllable so the bottle can be aligned with the target
+# lane (e.g. book at y=-0.16) without code edits — useful for tuning the
+# replan demo so the parked bottle sits exactly across the arm's reach path.
+HAZARD_BOTTLE_TRANSLATE = np.array([
+    0.85,
+    float(os.environ.get("ROBOT_CAPSTONE_BOTTLE_SPAWN_Y", "-0.09")),
+    float(os.environ.get("ROBOT_CAPSTONE_BOTTLE_SPAWN_Z", "0.35")),
+])
 HAZARD_BOTTLE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 # Warehouse Bottles authored in centimeters (metersPerUnit=0.01) like Cardbox.
 # Bake the unit factor + final-size scale into one factor. Tune in viewport
@@ -116,8 +129,16 @@ HAZARD_BOTTLE_HEIGHT = 0.22     # collider approx
 # Slower (-0.3) than the original -0.9 so "park" mode stops it precisely: at high
 # speed the per-frame park check overshoots PARK_X by 10-20 cm. -0.3 keeps the
 # per-frame travel small so the bottle halts near PARK_X. Still flies in well
-# within the (very slow) arm motion. Raise for a faster flythrough demo.
-HAZARD_BOTTLE_LINEAR_VELOCITY = np.array([-0.3, 0.0, 0.0])
+# within the (very slow) arm motion.
+#
+# Override via ROBOT_CAPSTONE_BOTTLE_VX. For the EE-detected replan demo the
+# bottle should be SLOW (e.g. -0.15) so the EE camera has time to see it,
+# the injector to publish /collision_object, and the global planner to issue
+# a re-plan before the bottle reaches PARK_X.
+HAZARD_BOTTLE_LINEAR_VELOCITY = np.array([
+    float(os.environ.get("ROBOT_CAPSTONE_BOTTLE_VX", "-0.3")),
+    0.0, 0.0,
+])
 
 # Hazard scenario mode (env ROBOT_CAPSTONE_HAZARD_MODE):
 #   "flythrough" (default) — bottle flies straight through the workspace and
@@ -138,6 +159,20 @@ HAZARD_OBJECT = os.environ.get("ROBOT_CAPSTONE_HAZARD_OBJECT", "bottle").strip()
 # sitting in the reaching path. Tune via env ROBOT_CAPSTONE_HAZARD_PARK_X so it
 # actually blocks the path the arm takes to the goal.
 HAZARD_BOTTLE_PARK_X = float(os.environ.get("ROBOT_CAPSTONE_HAZARD_PARK_X", "0.45"))
+# Auto-trigger the hazard launch the first time the arm starts moving instead
+# of waiting for a manual `ros2 topic pub /hazard/launch_bottle`. The launcher
+# subscribes to /joint_states and, AFTER an arming delay (so MoveIt hybrid
+# startup and any home-pose settling don't trip the trigger), fires once when
+# any joint exceeds the threshold from the latched reference pose.
+#
+# Tuning notes:
+#  - AUTO_TRIGGER_RAD: 0.10 rad ≈ 5.7° per joint. Real goal-directed motion
+#    blows past this; Isaac physics jitter and hybrid startup wiggle do not.
+#  - AUTO_ARM_SEC: 5 s comfortably swallows the hybrid container init + the
+#    first MoveAction "settle to current state" wiggle.
+HAZARD_AUTO_LAUNCH = os.environ.get("ROBOT_CAPSTONE_HAZARD_AUTO_LAUNCH", "0").strip() == "1"
+HAZARD_AUTO_TRIGGER_RAD = float(os.environ.get("ROBOT_CAPSTONE_AUTO_TRIGGER_RAD", "0.10"))
+HAZARD_AUTO_ARM_SEC = float(os.environ.get("ROBOT_CAPSTONE_AUTO_ARM_SEC", "5.0"))
 
 # Capture-only static humans for hand/forearm dataset (NOT hazards — no rigid
 # body, no motion). NVIDIA 4.2 People catalog has ~8 characters total. Pick
@@ -974,9 +1009,16 @@ def _set_bottle_velocity(v):
 
 
 def _apply_bottle_launch_velocity():
-    """Give the stationary hazard prim (bottle or box) its flight velocity."""
-    if _set_bottle_velocity(HAZARD_BOTTLE_LINEAR_VELOCITY):
-        print(f"[hazard] {HAZARD_OBJECT} launched v={HAZARD_BOTTLE_LINEAR_VELOCITY.tolist()}")
+    """Give the stationary hazard prim (bottle or box) its flight velocity.
+
+    Picks the velocity vector for the currently-active HAZARD_OBJECT so the
+    box / bottle scenarios can be tuned independently. Previously this always
+    applied the bottle velocity, which broke the "box flythrough + bottle park"
+    pairing once the two scenarios diverged in target speed.
+    """
+    v = HAZARD_BOX_LINEAR_VELOCITY if HAZARD_OBJECT == "box" else HAZARD_BOTTLE_LINEAR_VELOCITY
+    if _set_bottle_velocity(v):
+        print(f"[hazard] {HAZARD_OBJECT} launched v={v.tolist()}")
     else:
         print(f"[hazard] ERROR: could not apply {HAZARD_OBJECT} velocity")
 
@@ -1018,10 +1060,50 @@ async def _bottle_launch_loop():
     node = rclpy.create_node("hazard_bottle_launcher")
     pending = {"go": False}
     node.create_subscription(_Empty, "/hazard/launch_bottle", lambda _m: pending.__setitem__("go", True), 10)
-    print(f"[hazard] {HAZARD_OBJECT} launcher ready (mode={HAZARD_BOTTLE_MODE}) — "
-          "waiting for /hazard/launch_bottle")
     app = omni.kit.app.get_app()
     state = {"launched": False, "parked": False}
+
+    # Auto-launch on arm motion: subscribe to /joint_states and fire once any
+    # joint exceeds HAZARD_AUTO_TRIGGER_RAD from the latched reference pose.
+    # During the AUTO_ARM_SEC arming window the reference pose is continuously
+    # refreshed so that hybrid startup wiggle / settling don't bake themselves
+    # in as the trigger baseline. Coexists with the manual
+    # /hazard/launch_bottle path — whichever fires first wins.
+    import time as _time
+    auto_state = {"initial": None, "arm_at": None}
+    if HAZARD_AUTO_LAUNCH:
+        try:
+            from sensor_msgs.msg import JointState as _JointState
+        except Exception as _exc:
+            print(f"[hazard] auto-launch disabled — JointState import failed: {_exc}")
+        else:
+            def _js_cb(msg):
+                if state["launched"]:
+                    return
+                pos = list(msg.position)
+                now = _time.monotonic()
+                if auto_state["arm_at"] is None:
+                    auto_state["arm_at"] = now + HAZARD_AUTO_ARM_SEC
+                # Arming window: keep refreshing the reference pose so startup
+                # twitching gets absorbed instead of being treated as motion.
+                if now < auto_state["arm_at"]:
+                    auto_state["initial"] = pos
+                    return
+                try:
+                    max_delta = max(abs(p - p0) for p, p0 in zip(pos, auto_state["initial"]))
+                except Exception:
+                    return
+                if max_delta > HAZARD_AUTO_TRIGGER_RAD:
+                    pending["go"] = True
+                    print(f"[hazard] auto-launch fired — max joint Δ={max_delta:.3f} rad "
+                          f"(threshold={HAZARD_AUTO_TRIGGER_RAD})")
+            node.create_subscription(_JointState, "/joint_states", _js_cb, 10)
+            print(f"[hazard] auto-launch armed — Δ>{HAZARD_AUTO_TRIGGER_RAD} rad "
+                  f"after {HAZARD_AUTO_ARM_SEC}s warm-up on /joint_states")
+
+    print(f"[hazard] {HAZARD_OBJECT} launcher ready (mode={HAZARD_BOTTLE_MODE}, "
+          f"auto={'on' if HAZARD_AUTO_LAUNCH else 'off'}) — "
+          "trigger: /hazard/launch_bottle")
     while True:
         try:
             rclpy.spin_once(node, timeout_sec=0.0)
