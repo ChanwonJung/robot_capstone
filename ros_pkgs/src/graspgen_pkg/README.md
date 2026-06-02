@@ -37,6 +37,14 @@ ssh -p 30080 -N -L 5556:aurora-g5:5556 <USERNAME>@aurora.khu.ac.kr
 
 ---
 
+## 빌드
+
+```bash
+source launch_env.bash
+colcon build --packages-select graspgen_pkg
+source install/setup.bash
+```
+
 ## 실행
 
 ```bash
@@ -44,6 +52,8 @@ ros2 launch graspgen_pkg graspgen.launch.py \
   extrinsics_config:=/path/to/camera_extrinsics_isaac.yaml \
   zmq_port:=5556
 ```
+
+`extrinsics_config`는 `mask_projection_pkg`와 **동일한 YAML 파일**을 그대로 사용하면 된다.
 
 ---
 
@@ -54,6 +64,26 @@ ros2 launch graspgen_pkg graspgen.launch.py \
 | `/grasp_candidates` | `bt_executor_node` |
 | `/grasp_markers` | RViz2 |
 | `/graspgen/target_cloud` | 디버그 |
+
+### `/grasp_candidates` JSON 형식
+
+```json
+{
+  "candidates": [
+    {
+      "position":   [x, y, z],
+      "quaternion": [qx, qy, qz, qw],
+      "width":      0.08,
+      "quality":    0.92,
+      "frame":      "panda_link0"
+    }
+  ],
+  "target_centroid": [x, y, z],
+  "stamp": 1234567890.123
+}
+```
+
+`candidates`는 `quality` 내림차순 정렬. TF(`world` → `panda_link0`) 실패 시 `frame`은 `"world"`로 발행.
 
 ---
 
