@@ -84,15 +84,25 @@ HAZARD_BOX_ROTATION_DEG = np.array([0.0, 0.0, 30.0])
 # Cardbox_C2 USD is authored in centimeters (metersPerUnit=0.01) while the
 # parent stage is in meters. USD does NOT auto-rescale references, so the
 # visual scale bakes in the 0.01 unit factor.
-# native ≈ 0.51 m × 0.30 = 0.15 m box at scale=0.003.
-HAZARD_BOX_SCALE = np.array([0.003, 0.003, 0.003])
-HAZARD_BOX_FALLBACK_SIZE = np.array([0.14, 0.14, 0.14])
-# Box flight speed at /hazard/launch_bottle trigger. Override via
-# ROBOT_CAPSTONE_BOX_VX when paired with HAZARD_OBJECT=box for the
-# transient stop+resume demo (faster crossing = cleaner flythrough).
+# native ≈ 0.51 m, so scale 0.003 → ~0.15 m box, scale 0.002 → ~0.10 m box.
+# Uniform scale override via ROBOT_CAPSTONE_BOX_SCALE — useful for the
+# stop+resume demo where a smaller box has a smaller intersection with the
+# arm body and the planning-scene halt fires with less actual contact.
+_BOX_SCALE_UNIFORM = float(os.environ.get("ROBOT_CAPSTONE_BOX_SCALE", "0.003"))
+HAZARD_BOX_SCALE = np.array([_BOX_SCALE_UNIFORM] * 3)
+# Fallback box (when the cardbox USD isn't available) keeps a fixed scale-
+# relative size so it's roughly visually equivalent to the loaded USD.
+_BOX_FALLBACK_RATIO = 0.14 / 0.003  # 0.14 m fallback at default scale 0.003
+HAZARD_BOX_FALLBACK_SIZE = np.full(3, _BOX_SCALE_UNIFORM * _BOX_FALLBACK_RATIO)
+# Box flight velocity at /hazard/launch_bottle trigger. All three axes are
+# env-controllable so the stop+resume demo can fly the box laterally across
+# the arm's reach path (VY) rather than along it (VX) — the lateral cross
+# is what makes the halt visible without the box physically slamming the
+# arm body, since the box never sits in the same lane as the arm.
 HAZARD_BOX_LINEAR_VELOCITY = np.array([
     float(os.environ.get("ROBOT_CAPSTONE_BOX_VX", "-0.4")),
-    0.0, 0.0,
+    float(os.environ.get("ROBOT_CAPSTONE_BOX_VY", "0.0")),
+    float(os.environ.get("ROBOT_CAPSTONE_BOX_VZ", "0.0")),
 ])
 
 # pet_bottle hazard. Uses real PET USD captured into the v3 dataset so train
@@ -107,11 +117,11 @@ HAZARD_BOTTLE_ASSET = (
 # enters the workspace ~0.5 s after the launch trigger (fired when the arm starts).
 # Appears-in-FOV delay ≈ (x - 0.7) / |velocity| s. Pull toward 0.78 to appear even
 # sooner, push out for later. (Stay under the stage wall that blocked 4.5+.)
-# Y / Z are env-controllable so the bottle can be aligned with the target
-# lane (e.g. book at y=-0.16) without code edits — useful for tuning the
-# replan demo so the parked bottle sits exactly across the arm's reach path.
+# X / Y / Z are env-controllable so the spawn can be repositioned for both
+# the replan demo (parked above the book, ~constant Y) and the stop+resume
+# demo (off to one side, flies laterally across the arm's reach path).
 HAZARD_BOTTLE_TRANSLATE = np.array([
-    0.85,
+    float(os.environ.get("ROBOT_CAPSTONE_BOTTLE_SPAWN_X", "0.85")),
     float(os.environ.get("ROBOT_CAPSTONE_BOTTLE_SPAWN_Y", "-0.09")),
     float(os.environ.get("ROBOT_CAPSTONE_BOTTLE_SPAWN_Z", "0.35")),
 ])
