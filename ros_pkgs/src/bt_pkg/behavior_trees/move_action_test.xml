@@ -24,8 +24,11 @@
       <ParseScene/>
       <SelectGraspCandidate/>
       <!-- raw centroid("grasp_pose") 대신 그 위 pre_grasp_z_offset(기본 0.12m)
-           만큼 띄운 pre_grasp_pose를 노림 → 책상 바닥 충돌/IK 실패 회피 -->
-      <MoveAction pose_key="pre_grasp_pose" speed="0.2"/>
+           만큼 띄운 pre_grasp_pose를 노림 → 책상 바닥 충돌/IK 실패 회피.
+           speed: replan 데모에서 multi-link arm sweep 폭을 줄여 local 5 Hz
+           tick(200ms) 당 cartesian 이동량 4mm으로 제한 — collision_object
+           안으로 여러 link가 한 번에 깊이 들어가는 것을 막는다. -->
+      <MoveAction pose_key="pre_grasp_pose" speed="0.01"/>
     </Sequence>
   </BehaviorTree>
 </root>
