@@ -79,6 +79,8 @@ class VgnGraspNode(Node):
         self.declare_parameter('grasp_candidates_topic', '/grasp_candidates')
         self.declare_parameter('extrinsics_config',      '')
         self.declare_parameter('use_top_depth',          True)
+        self.declare_parameter('top_occlude_filter',     True)
+        self.declare_parameter('trunc_factor',           4.0)
         self.declare_parameter('world_frame',            'world')
         self.declare_parameter('robot_frame',            'panda_link0')
 
@@ -87,8 +89,10 @@ class VgnGraspNode(Node):
         self._min_quality  = self.get_parameter('min_quality').value
         self._max_k        = self.get_parameter('max_grasp_candidates').value
         self._min_pts      = self.get_parameter('min_point_count').value
-        self._use_top      = self.get_parameter('use_top_depth').value
-        self._world_frame  = self.get_parameter('world_frame').value
+        self._use_top            = self.get_parameter('use_top_depth').value
+        self._top_occlude_filter = self.get_parameter('top_occlude_filter').value
+        self._trunc_factor       = self.get_parameter('trunc_factor').value
+        self._world_frame        = self.get_parameter('world_frame').value
         self._robot_frame  = self.get_parameter('robot_frame').value
 
         # ── Extrinsics ────────────────────────────────────────────────────────
@@ -224,20 +228,35 @@ class VgnGraspNode(Node):
             roi_min, self._roi_size_m, self._reso,
             self._ee_depth, self._ee_K, self._R_ee, self._t_ee,
             **top_args,
+            top_occlude_filter=self._top_occlude_filter,
+            trunc_factor=self._trunc_factor,
         )
 
         self._publish_tsdf_debug(grid, roi_min)
 
         qual_vol, rot_vol, width_vol = vgn_predict(grid, self._net, self._device)
+
+        tsdf_flat = grid.squeeze()
+        n_surface = int(np.sum((tsdf_flat >= 0.4) & (tsdf_flat <= 0.6)))
+        n_inside  = int(np.sum(tsdf_flat < 0.4))
+        qual_max  = float(qual_vol.max())
+        self.get_logger().info(
+            f'TSDF stats — surface voxels: {n_surface}  inside: {n_inside}  '
+            f'VGN qual_max(pre-process): {qual_max:.4f}'
+        )
         qual_vol, rot_vol, width_vol = vgn_process(grid, qual_vol, rot_vol, width_vol)
 
         voxel_size        = self._roi_size_m / self._reso
         grasps_voxel, scores = vgn_select(qual_vol, rot_vol, width_vol,
                                           threshold=self._min_quality)
         if not grasps_voxel:
-            self.get_logger().info('No grasp candidates after NMS')
-            # DEBUG: quality 무관 best 1개 시각화 (git push 시 주석 처리)
             debug_all, debug_scores = vgn_select(qual_vol, rot_vol, width_vol, threshold=0.0)
+            if not debug_all:
+                self.get_logger().warn(
+                    f'VGN quality all-zero after process (surface voxels={n_surface}) — '
+                    'TSDF 품질 불량. /tsdf_debug 확인 필요.'
+                )
+                return
             if debug_all:
                 best_idx = int(np.argmax(debug_scores))
                 best_g   = from_voxel_coordinates(debug_all[best_idx], voxel_size)
