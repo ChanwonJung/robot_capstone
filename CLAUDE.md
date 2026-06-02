@@ -126,7 +126,7 @@ ros2 launch grounded_sam_pkg grounded_sam_dual.launch.py
 source launch_env.bash
 ros2 launch qwen_pkg inst_input_qwen.launch.py \
   vllm_endpoint_url:=http://localhost:8000/v1 \
-  model_name:=Qwen/Qwen3.5-VL-9B-Instruct
+  model_name:=Qwen/Qwen3.5-9B
 # Opens an xterm for typing user instructions — ros2 launch doesn't forward stdin
 
 # Terminal 2b — OR: Qwen stub (hardcoded LABEL_TO_CATEGORY, no VLM call needed)
