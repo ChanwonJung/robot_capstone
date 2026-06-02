@@ -113,7 +113,31 @@ HAZARD_BOTTLE_HEIGHT = 0.22     # collider approx
 # until then). From x=1.0 at -0.3 m/s it reaches the arm's goal-x (~0.71) in ~1 s
 # and crosses the workspace over the next ~2 s — i.e. during the grasp motion.
 # Tune magnitude to match how fast you want the hazard to cross.
-HAZARD_BOTTLE_LINEAR_VELOCITY = np.array([-0.9, 0.0, 0.0])
+# Slower (-0.3) than the original -0.9 so "park" mode stops it precisely: at high
+# speed the per-frame park check overshoots PARK_X by 10-20 cm. -0.3 keeps the
+# per-frame travel small so the bottle halts near PARK_X. Still flies in well
+# within the (very slow) arm motion. Raise for a faster flythrough demo.
+HAZARD_BOTTLE_LINEAR_VELOCITY = np.array([-0.3, 0.0, 0.0])
+
+# Hazard scenario mode (env ROBOT_CAPSTONE_HAZARD_MODE):
+#   "flythrough" (default) — bottle flies straight through the workspace and
+#                            exits: a TRANSIENT hazard for the stop+resume demo.
+#   "park"                 — bottle flies in, then HALTS in front of the arm and
+#                            stays put: a PERSISTENT hazard for the avoidance
+#                            (replan) demo. Top YOLO keeps detecting it, so the
+#                            injected collision object persists and the global
+#                            re-plan routes the arm around it.
+HAZARD_BOTTLE_MODE = os.environ.get("ROBOT_CAPSTONE_HAZARD_MODE", "flythrough").strip().lower()
+# Which hazard asset gets spawned + launched (env ROBOT_CAPSTONE_HAZARD_OBJECT):
+#   "bottle" (default) — pet_bottle USD, used for v3 dataset / runtime hazard.
+#   "box"              — cardbox USD, spawned at the bottle's position with the
+#                        bottle's flight params so capture parity holds.
+HAZARD_OBJECT = os.environ.get("ROBOT_CAPSTONE_HAZARD_OBJECT", "bottle").strip().lower()
+# In "park" mode, zero the bottle's velocity once its world x drops to this value.
+# It flies from x=0.85 toward -x, so stopping near the arm's goal-x leaves it
+# sitting in the reaching path. Tune via env ROBOT_CAPSTONE_HAZARD_PARK_X so it
+# actually blocks the path the arm takes to the goal.
+HAZARD_BOTTLE_PARK_X = float(os.environ.get("ROBOT_CAPSTONE_HAZARD_PARK_X", "0.45"))
 
 # Capture-only static humans for hand/forearm dataset (NOT hazards — no rigid
 # body, no motion). NVIDIA 4.2 People catalog has ~8 characters total. Pick
@@ -462,10 +486,21 @@ def build_tabletop_items(stage, root_path):
     return props_root
 
 
-def build_hazard_box(stage, path):
-    """small_box hazard — uses Cardbox_C2 USD from XR Content if available."""
-    root = create_dynamic_body_root(stage, path, HAZARD_BOX_TRANSLATE, mass=0.4)
-    set_xform(root, rotate_xyz_deg=HAZARD_BOX_ROTATION_DEG)
+def build_hazard_box(stage, path, translate=None, rotation_deg=None, initial_velocity=None):
+    """small_box hazard — uses Cardbox_C2 USD from XR Content if available.
+
+    Spawn/motion can be overridden so the box can stand in for the bottle in
+    capture mode (ROBOT_CAPSTONE_HAZARD_OBJECT=box): same spawn pose, zero
+    initial velocity, and the /hazard/launch_bottle trigger gives it flight.
+    """
+    if translate is None:
+        translate = HAZARD_BOX_TRANSLATE
+    if rotation_deg is None:
+        rotation_deg = HAZARD_BOX_ROTATION_DEG
+    if initial_velocity is None:
+        initial_velocity = HAZARD_BOX_LINEAR_VELOCITY
+    root = create_dynamic_body_root(stage, path, translate, mass=0.4)
+    set_xform(root, rotate_xyz_deg=rotation_deg)
     if CARDBOX_ASSET.exists():
         add_visual_reference(
             stage,
@@ -483,7 +518,7 @@ def build_hazard_box(stage, path):
         f"{path}/Collider",
         size=HAZARD_BOX_FALLBACK_SIZE.tolist(),
     )
-    apply_initial_motion(root, HAZARD_BOX_LINEAR_VELOCITY)
+    apply_initial_motion(root, initial_velocity)
     return root
 
 
@@ -574,10 +609,19 @@ def build_hazards(stage, root_path):
     if stage.GetPrimAtPath(root_path):
         stage.RemovePrim(root_path)
     hazards_root = define_xform(stage, root_path)
-    # Active hazard — single fly-in for v3 detection check. Re-enable other
-    # builders one-at-a-time as their captured-and-trained USDs come in.
-    build_hazard_bottle(stage, f"{hazards_root.GetPath()}/HazardBottle")
-    # build_hazard_box(stage, f"{hazards_root.GetPath()}/HazardBox")
+    # Active hazard chosen by ROBOT_CAPSTONE_HAZARD_OBJECT (bottle | box). Both
+    # spawn stationary at the bottle's pose and respond to /hazard/launch_bottle
+    # so the capture helper / hybrid demos stay identical across assets.
+    if HAZARD_OBJECT == "box":
+        build_hazard_box(
+            stage,
+            f"{hazards_root.GetPath()}/HazardBox",
+            translate=HAZARD_BOTTLE_TRANSLATE,
+            rotation_deg=HAZARD_BOTTLE_ROTATION_DEG,
+            initial_velocity=np.zeros(3),
+        )
+    else:
+        build_hazard_bottle(stage, f"{hazards_root.GetPath()}/HazardBottle")
     # build_hazard_arm(stage, f"{hazards_root.GetPath()}/HazardArm")
     return hazards_root
 
@@ -869,7 +913,7 @@ def apply_scene():
         TOP_CAMERA_FOCAL_LENGTH_MM,
     )
     attach_depth_sensor_template(stage, str(ee_camera.GetPath()), EE_DEPTH_SCOPE, baseline_mm=42)
-    attach_depth_sensor_template(stage, str(top_camera.GetPath()), TOP_DEPTH_SCOPE)
+    attach_depth_sensor_template(stage, str(top_camera.GetPath()), TOP_DEPTH_SCOPE, baseline_mm=42)
     force_perspective_view()
     bind_custom_viewports(str(ee_camera.GetPath()), str(top_camera.GetPath()))
     EE_VIEW_ROS_BRIDGE = build_ee_view_bridge(str(ee_camera.GetPath()))
@@ -885,31 +929,76 @@ def apply_scene():
     )
 
 
-def _apply_bottle_launch_velocity():
-    """Give the stationary hazard bottle its flight velocity (runtime, during Play).
+# Single cached rigid-prim view for the hazard bottle. Creating a fresh
+# RigidPrim/SingleRigidPrim view every frame RE-INITIALISES the physics view and
+# zeroes the bottle's velocity (so it never flies). Create the view ONCE and
+# reuse it for launch / pose-read / stop.
+_BOTTLE_RB = {"view": None, "kind": None}
 
-    Isaac's exact runtime-velocity API varies by version; try the likely ones and
-    log which worked so it can be pinned down in-sim.
-    """
-    path = HAZARD_OBJECT_PATHS["HazardBottle"]
-    v = HAZARD_BOTTLE_LINEAR_VELOCITY
+
+def _get_bottle_rb():
+    """Create (once) and return the cached (view, kind) for the active hazard prim."""
+    if _BOTTLE_RB["view"] is not None:
+        return _BOTTLE_RB["view"], _BOTTLE_RB["kind"]
+    path = HAZARD_OBJECT_PATHS["HazardBox" if HAZARD_OBJECT == "box" else "HazardBottle"]
     try:
         from isaacsim.core.prims import RigidPrim
-        rb = RigidPrim(path)
-        rb.set_velocities(np.array([[float(v[0]), float(v[1]), float(v[2]), 0.0, 0.0, 0.0]], dtype=np.float32))
-        print(f"[hazard] bottle launched via RigidPrim.set_velocities v={v.tolist()}")
-        return
+        _BOTTLE_RB["view"], _BOTTLE_RB["kind"] = RigidPrim(path), "multi"
+        return _BOTTLE_RB["view"], _BOTTLE_RB["kind"]
     except Exception as exc:
-        print(f"[hazard] RigidPrim.set_velocities failed: {exc}")
+        print(f"[hazard] RigidPrim create failed: {exc}")
     try:
         from isaacsim.core.prims import SingleRigidPrim
-        rb = SingleRigidPrim(path)
-        rb.set_linear_velocity(np.array([float(v[0]), float(v[1]), float(v[2])], dtype=np.float32))
-        print(f"[hazard] bottle launched via SingleRigidPrim.set_linear_velocity v={v.tolist()}")
-        return
+        _BOTTLE_RB["view"], _BOTTLE_RB["kind"] = SingleRigidPrim(path), "single"
+        return _BOTTLE_RB["view"], _BOTTLE_RB["kind"]
     except Exception as exc:
-        print(f"[hazard] SingleRigidPrim.set_linear_velocity failed: {exc}")
-    print("[hazard] ERROR: could not apply bottle velocity — report the errors above")
+        print(f"[hazard] SingleRigidPrim create failed: {exc}")
+    return None, None
+
+
+def _set_bottle_velocity(v):
+    """Set the bottle's linear velocity at runtime via the cached view."""
+    rb, kind = _get_bottle_rb()
+    if rb is None:
+        return False
+    try:
+        if kind == "multi":
+            rb.set_velocities(
+                np.array([[float(v[0]), float(v[1]), float(v[2]), 0.0, 0.0, 0.0]], dtype=np.float32))
+        else:
+            rb.set_linear_velocity(np.array([float(v[0]), float(v[1]), float(v[2])], dtype=np.float32))
+        return True
+    except Exception as exc:
+        print(f"[hazard] set_bottle_velocity failed: {exc}")
+        return False
+
+
+def _apply_bottle_launch_velocity():
+    """Give the stationary hazard prim (bottle or box) its flight velocity."""
+    if _set_bottle_velocity(HAZARD_BOTTLE_LINEAR_VELOCITY):
+        print(f"[hazard] {HAZARD_OBJECT} launched v={HAZARD_BOTTLE_LINEAR_VELOCITY.tolist()}")
+    else:
+        print(f"[hazard] ERROR: could not apply {HAZARD_OBJECT} velocity")
+
+
+def _stop_bottle():
+    """Zero the bottle's velocity so it halts in place (gravity off -> stays put)."""
+    return _set_bottle_velocity((0.0, 0.0, 0.0))
+
+
+def _get_bottle_x():
+    """Read the bottle's current world x at runtime (None if unavailable)."""
+    rb, kind = _get_bottle_rb()
+    if rb is None:
+        return None
+    try:
+        if kind == "multi":
+            positions, _ = rb.get_world_poses()
+            return float(positions[0][0])
+        pos, _ = rb.get_world_pose()
+        return float(pos[0])
+    except Exception:
+        return None
 
 
 async def _bottle_launch_loop():
@@ -929,8 +1018,10 @@ async def _bottle_launch_loop():
     node = rclpy.create_node("hazard_bottle_launcher")
     pending = {"go": False}
     node.create_subscription(_Empty, "/hazard/launch_bottle", lambda _m: pending.__setitem__("go", True), 10)
-    print("[hazard] bottle launcher ready — waiting for /hazard/launch_bottle")
+    print(f"[hazard] {HAZARD_OBJECT} launcher ready (mode={HAZARD_BOTTLE_MODE}) — "
+          "waiting for /hazard/launch_bottle")
     app = omni.kit.app.get_app()
+    state = {"launched": False, "parked": False}
     while True:
         try:
             rclpy.spin_once(node, timeout_sec=0.0)
@@ -939,6 +1030,16 @@ async def _bottle_launch_loop():
         if pending["go"]:
             pending["go"] = False
             _apply_bottle_launch_velocity()
+            state["launched"] = True
+            state["parked"] = False
+        # "park" mode: once the flying bottle reaches PARK_X, halt it so it stays
+        # in the arm's path as a persistent obstacle (avoidance / replan demo).
+        if HAZARD_BOTTLE_MODE == "park" and state["launched"] and not state["parked"]:
+            x = _get_bottle_x()
+            if x is not None and x <= HAZARD_BOTTLE_PARK_X:
+                if _stop_bottle():
+                    state["parked"] = True
+                    print(f"[hazard] bottle PARKED at x≈{x:.2f} — persistent obstacle")
         await app.next_update_async()
 
 
