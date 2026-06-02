@@ -9,7 +9,7 @@
   ros__parameters:
     # Inference params.
     device: "cuda:0"          # "cpu", "cuda:0", or "auto"
-    conf_threshold: 0.35
+    conf_threshold: 0.40
     iou_threshold: 0.5
     imgsz: 640
     half: true                # FP16 for Ampere+ GPUs
