@@ -123,7 +123,16 @@ def generate_launch_description():
     )
 
     global_planner_param = _load_yaml("moveit_isaac_bridge_pkg", "config/hybrid/global_planner.yaml")
-    local_planner_param = _load_yaml("moveit_isaac_bridge_pkg", "config/hybrid/local_planner.yaml")
+    # Local planner config is selected at runtime by manager_logic — see
+    # _build_local_planner below. The replan profile uses a higher
+    # local_planning_frequency than stop_resume so the reactive layer
+    # detects an injected obstacle before the arm crosses into its
+    # collision volume (which would crash the planning pipeline through
+    # OMPL CheckStartStateCollision → manager double-abort → SIGABRT).
+    local_planner_yaml_default = _load_yaml(
+        "moveit_isaac_bridge_pkg", "config/hybrid/local_planner.yaml")
+    local_planner_yaml_replan = _load_yaml(
+        "moveit_isaac_bridge_pkg", "config/hybrid/local_planner_replan.yaml")
     # Isaac in this scene does NOT publish /clock, so the whole stack runs on wall
     # time. use_sim_time:True would (a) crash the composable container on the
     # /clock subscription QoS override and (b) stall every node at time 0.
@@ -132,25 +141,84 @@ def generate_launch_description():
     # /joint_states is the canonical wall-time topic (joint_state_restamp_node
     # republishes Isaac's /joint_states_isaac here), so the planners + RSP just use
     # /joint_states directly — no remap needed.
+    #
+    # NOTE: an earlier attempt to add FixStartStateCollision to the OMPL
+    # request_adapters list to recover from multi-link contact at the local
+    # stop position was reverted — that adapter was removed from MoveIt 2 in
+    # Jazzy (only Check* and the two non-Fix utility adapters remain), so
+    # registering it crashes the container at plugin load.
+    #
+    # Instead we shrink the collision-check geometry of the gripper links
+    # via negative link_padding. MoveIt's robot collision model adds this
+    # padding around every link (positive = safety buffer); a negative value
+    # is treated as a tight-fit shrink, so the planner sees the fingers as
+    # ~1 cm smaller than they really are. Combined with the hazard box's
+    # negative xy_margin (in hazard_collision_injector.launch.py), the
+    # gripper can pass right next to the parked bottle without OMPL
+    # registering a collision, which is what was crashing the manager.
+    link_padding_override = {
+        "robot_description_planning.link_padding.panda_leftfinger": -0.01,
+        "robot_description_planning.link_padding.panda_rightfinger": -0.01,
+        "robot_description_planning.link_padding.panda_hand": -0.005,
+    }
     global_planner_node = ComposableNode(
         package="moveit_hybrid_planning",
         plugin="moveit::hybrid_planning::GlobalPlannerComponent",
         name="global_planner",
-        parameters=[global_planner_param, moveit_config.to_dict(), sim_time],
+        parameters=[
+            global_planner_param,
+            moveit_config.to_dict(),
+            link_padding_override,
+            sim_time,
+        ],
     )
-    local_planner_node = ComposableNode(
-        package="moveit_hybrid_planning",
-        plugin="moveit::hybrid_planning::LocalPlannerComponent",
-        name="local_planner",
-        parameters=[local_planner_param, moveit_config.to_dict(), sim_time],
-    )
+    # local_planner is loaded AFTER the container is up, via _build_local_planner.
+    # That OpaqueFunction reads manager_logic at runtime and picks the matching
+    # yaml; baking local into the container's initial descriptions would force
+    # us to pick one of the two yamls statically.
+    def _build_local_planner(context):
+        logic = LaunchConfiguration("manager_logic").perform(context)
+        local_param = (
+            local_planner_yaml_replan
+            if logic == "replan"
+            else local_planner_yaml_default
+        )
+        local_planner_node = ComposableNode(
+            package="moveit_hybrid_planning",
+            plugin="moveit::hybrid_planning::LocalPlannerComponent",
+            name="local_planner",
+            # Local needs the same link_padding shrink as global so its
+            # collision check during ForwardTrajectory advance agrees with
+            # the path the global planner just produced — otherwise local
+            # stops the arm at the (un-shrunk) finger envelope and we're
+            # back to the holding/SIGABRT cycle.
+            parameters=[
+                local_param,
+                moveit_config.to_dict(),
+                link_padding_override,
+                sim_time,
+            ],
+        )
+        # Load before the manager (manager has its own 8 s TimerAction) so
+        # the manager's init can find local_planner's action server.
+        return [
+            TimerAction(
+                period=2.0,
+                actions=[
+                    LoadComposableNodes(
+                        target_container="/hybrid_planning_container",
+                        composable_node_descriptions=[local_planner_node],
+                    )
+                ],
+            )
+        ]
 
     container = ComposableNodeContainer(
         name="hybrid_planning_container",
         namespace="/",
         package="rclcpp_components",
         executable="component_container_mt",
-        composable_node_descriptions=[global_planner_node, local_planner_node],
+        composable_node_descriptions=[global_planner_node],
         output="screen",
     )
 
@@ -231,6 +299,7 @@ def generate_launch_description():
             restamp_node,
             robot_state_publisher,
             container,
+            OpaqueFunction(function=_build_local_planner),
             OpaqueFunction(function=_manager_setup),
             command_bridge,
             gripper_server,

@@ -22,6 +22,12 @@ planning_pipelines:
 plan_request_params:
   planning_attempts: 1
   planning_pipeline: ompl
+  # Cap planning_time so the global finishes before the local planner's
+  # hard-coded stuck-iters threshold trips (and tears down its goal handle,
+  # losing the new trajectory). With local_planner_replan @ 3 Hz the local
+  # holds ~6.7 s; 2 s for global keeps a comfortable margin and is more
+  # than RRTConnect needs on the Panda for a single-obstacle detour.
+  planning_time: 2.0
   # Slow global motion so the hazard bottle crosses the path mid-motion (and the
   # stop+resume is clearly visible). The client's request value also sets this.
   max_velocity_scaling_factor: 0.015
