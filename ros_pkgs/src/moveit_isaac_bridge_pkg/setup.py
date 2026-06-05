@@ -18,7 +18,9 @@ setup(
         ("share/" + package_name + "/config/hybrid", [
             "config/hybrid/global_planner.yaml",
             "config/hybrid/local_planner.yaml",
+            "config/hybrid/local_planner_replan.yaml",
             "config/hybrid/hybrid_planning_manager.yaml",
+            "config/hybrid/hybrid_planning_manager_replan.yaml",
         ]),
         ("share/" + package_name + "/launch", [
             "launch/joint_trajectory_bridge.launch.py",
@@ -27,6 +29,7 @@ setup(
             "launch/target_pose_executor.launch.py",
             "launch/hazard_monitor.launch.py",
             "launch/hazard_collision_injector.launch.py",
+            "launch/hazard_collision_injector_ee.launch.py",
             "launch/hazard_avoidance_viz.launch.py",
             "launch/hybrid_planning.launch.py",
         ]),

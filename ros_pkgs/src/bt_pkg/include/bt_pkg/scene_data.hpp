@@ -44,7 +44,10 @@ struct SceneData {
 
   // ── /world_map_result ────────────────────────────────────────────────────
   bool world_map_fresh = false;
-  rclcpp::Time world_map_stamp;
+  // Stamped from node->get_clock()->now() (RCL_ROS_TIME). Default-constructed
+  // rclcpp::Time is RCL_SYSTEM_TIME, so comparing the two throws
+  // "can't compare times with different time sources" — pin the clock type here.
+  rclcpp::Time world_map_stamp{0, 0, RCL_ROS_TIME};
   std::array<double, 3> target_centroid      = {};
   std::array<double, 3> destination_centroid = {};
   std::string target_label;
@@ -52,7 +55,7 @@ struct SceneData {
 
   // ── /grasp_candidates (vgn_grasp_node) ──────────────────────────────────
   bool grasp_candidates_fresh = false;
-  rclcpp::Time grasp_candidates_stamp;
+  rclcpp::Time grasp_candidates_stamp{0, 0, RCL_ROS_TIME};
   std::vector<GraspCandidate> grasp_candidates;  // sorted best-first by VGN
 
   // ── /qwen/grounding_result ───────────────────────────────────────────────
@@ -61,11 +64,11 @@ struct SceneData {
 
   // ── /yolo/world_map (yolo_world_map_node) ───────────────────────────────
   std::vector<YoloObject> yolo_objects;
-  rclcpp::Time yolo_world_map_stamp;
+  rclcpp::Time yolo_world_map_stamp{0, 0, RCL_ROS_TIME};
 
   // ── /yolo/target_centroid ────────────────────────────────────────────────
   geometry_msgs::msg::PointStamped target_centroid_live;
-  rclcpp::Time target_centroid_stamp;
+  rclcpp::Time target_centroid_stamp{0, 0, RCL_ROS_TIME};
 
   // ── /bt/hazard_level ─────────────────────────────────────────────────────
   // 0=clear  1=slow (obstacle detected)  3=halt (arm/person detected)
@@ -77,7 +80,7 @@ struct SceneData {
 
   // ── Replan / cycle coordination ──────────────────────────────────────────
   // WaitForScene only unblocks when both stamps are newer than this.
-  rclcpp::Time last_processed_stamp;
+  rclcpp::Time last_processed_stamp{0, 0, RCL_ROS_TIME};
   bool awaiting_replan = false;
 };
 

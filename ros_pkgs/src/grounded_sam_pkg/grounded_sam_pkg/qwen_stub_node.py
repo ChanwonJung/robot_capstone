@@ -18,6 +18,12 @@ LABEL_TO_CATEGORY: dict[str, str] = {
     "cup":        "TARGET",
     "glass cup":  "TARGET",
     "mug":        "TARGET",
+    # depth-friendly 불투명 타겟 (투명 유리컵은 depth 불안정 → centroid 튐)
+    # red ball/apple은 GDINO가 서로 혼동(둘 다 빨갛고 둥금) → 두 덩어리 검출.
+    # book은 갈색 사각형이라 단일 검출 → 안정적 centroid. 단일 타겟 권장.
+    "book":       "TARGET",
+    "red ball":   "TARGET",
+    "ball":       "TARGET",
     "table":      "DESTINATION",
 }
 

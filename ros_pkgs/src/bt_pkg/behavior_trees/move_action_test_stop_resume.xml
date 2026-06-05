@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  move_action_test_stop_resume.xml — Phase 2a (stop+resume) variant.
+
+  Mirrors move_action_test.xml but halves the MoveAction speed so the arm
+  is moving slowly enough at the moment the hazard box crosses the path
+  that ForwardTrajectory's halt fires before the multi-link sweep can
+  reach the inflated box volume. The shared move_action_test.xml uses
+  0.01 m/s for the Phase 2b replan demo, where the bottle is parked and
+  the planner re-routes; for a transient box at -1.5 m/s the arm needs
+  to be even more conservative because a single mistimed advance puts
+  the gripper inside the moving box mid-frame.
+
+  Usage:
+    ros2 launch bt_pkg bt_system.launch.py \
+      tree_file:=$(ros2 pkg prefix bt_pkg)/share/bt_pkg/behavior_trees/move_action_test_stop_resume.xml
+
+  Triggers are identical to move_action_test.xml:
+    /world_map_result  (target centroid)
+    /grasp_candidates  ({"candidates": []} — empty, falls back to centroid)
+-->
+<root BTCPP_format="4">
+  <BehaviorTree ID="MoveActionTest">
+    <Sequence name="world_map_to_moveit">
+      <WaitForScene/>
+      <ParseScene/>
+      <SelectGraspCandidate/>
+      <!-- 0.005 m/s — slow enough that the arm has effectively only
+           travelled a few mm by the time the fast-moving (-2.5 m/s) box
+           reaches its position; that lets the inflated +0.08 m
+           collision_object catch the upcoming trajectory point and halt
+           BEFORE the arm body has time to push into the box's lane.
+           Looks slow on the goal traverse but reads cleanly as
+           "arm pauses for the obstacle" rather than "arm gets hit". -->
+      <MoveAction pose_key="pre_grasp_pose" speed="0.005"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

@@ -1,0 +1,34 @@
+graspgen_node:
+  ros__parameters:
+    # ── ZMQ server connection ─────────────────────────────────────────────────
+    # SSH tunnel 후 접속할 주소. 서버가 바뀌어도 이 두 값만 수정하면 됨.
+    # e.g. aurora-g5: ssh -N -L 5556:aurora-g5:5556 <user>@aurora.khu.ac.kr
+    zmq_host: '127.0.0.1'
+    zmq_port: 5556
+    zmq_timeout_ms: 5000
+
+    # ── inference parameters ──────────────────────────────────────────────────
+    num_grasps: 50          # 서버에 요청할 총 grasp 후보 수
+    topk_num_grasps: 5      # 발행할 상위 K개 (BT max_grasp_candidates와 맞춤)
+    gripper_width: 0.08     # Panda 기본 gripper 폭 (m)
+
+    # ── point cloud extraction ────────────────────────────────────────────────
+    min_point_count: 50     # TARGET 포인트 최소 수 (이하면 skip)
+    max_points: 4096        # 초과 시 random downsample
+    min_depth: 0.05         # depth 유효 범위 하한 (m)
+    max_depth: 15.0         # depth 유효 범위 상한 (m)
+
+    # ── topic names (오버라이드 가능) ─────────────────────────────────────────
+    ee_depth_topic:           '/ee_camera/depth_image'
+    ee_camera_info_topic:     '/ee_camera/camera_info'
+    mask_topic:               '/qwen/mask_image'
+    labeled_detections_topic: '/qwen/labeled_detections'
+    world_map_result_topic:   '/world_map_result'
+    grasp_candidates_topic:   '/grasp_candidates'
+
+    # ── frames ────────────────────────────────────────────────────────────────
+    world_frame:  'world'
+    robot_frame:  'panda_link0'
+
+    # ── extrinsics (빈 문자열 → mask_projection_pkg/config/camera_extrinsics.yaml) ──
+    extrinsics_config: ''
