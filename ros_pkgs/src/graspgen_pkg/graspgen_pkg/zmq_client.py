@@ -15,6 +15,14 @@ Server protocol (aurora-g5, graspgen_franka_panda.yml):
           "confidences": bytes — (M,)   float32, grasp scores (descending)
       }
 
+TODO (server-side, paper §5.1): the GraspGen paper reports better empirical
+results *without* non-maximal suppression — "inference without non-maximal
+suppression was better, most likely since our motion planner is proficient
+with goal set targets." The current ZMQ protocol does not expose an NMS
+toggle. Coordinate with the server maintainer to either (a) disable NMS
+internally by default, or (b) add a `use_nms: bool` field here. Once added,
+also extend `_pack_request` and surface it as a graspgen_node parameter.
+
 NOTE: If the server schema changes, update _pack_request / _unpack_response only.
       graspgen_node.py does not need to change.
 
@@ -93,18 +101,44 @@ class GraspGenClient:
 
         payload = self._pack_request(cloud, num_grasps, topk_num_grasps)
 
+        # ZMQ REQ sockets enforce a strict send-recv state machine. A timeout
+        # or error mid-cycle leaves the socket stuck in an invalid state and
+        # every subsequent request raises "Operation cannot be accomplished in
+        # current state". Reset the socket on any failure so the next request
+        # gets a clean REQ.
         try:
             self._socket.send(payload)
             raw = self._socket.recv()
         except zmq.error.Again:
+            self._reset_socket()
             raise RuntimeError(
                 f'GraspGen server timeout after {self._timeout_ms} ms '
-                f'(addr={self._addr}). Is the SSH tunnel open?'
+                f'(addr={self._addr}). Is the SSH tunnel open? '
+                f'Larger num_grasps may need a higher zmq_timeout_ms.'
             )
         except zmq.ZMQError as e:
+            self._reset_socket()
             raise RuntimeError(f'ZMQ error: {e}  (addr={self._addr})')
 
         return self._unpack_response(raw)
+
+    def _reset_socket(self) -> None:
+        """Recreate the REQ socket after a failure.
+
+        REQ sockets cannot recover in-place from a timeout: send() can only
+        follow recv(), and after a failed recv() the next send() raises EFSM
+        ("Operation cannot be accomplished in current state"). Close and
+        reopen to return to a clean SEND state.
+        """
+        try:
+            self._socket.close(linger=0)
+        except Exception:
+            pass
+        self._socket = self._ctx.socket(zmq.REQ)
+        self._socket.setsockopt(zmq.RCVTIMEO, self._timeout_ms)
+        self._socket.setsockopt(zmq.SNDTIMEO, self._timeout_ms)
+        self._socket.setsockopt(zmq.LINGER, 0)
+        self._socket.connect(self._addr)
 
     def close(self) -> None:
         self._socket.close()

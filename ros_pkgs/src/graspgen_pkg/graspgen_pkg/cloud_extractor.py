@@ -18,12 +18,17 @@ _FALLBACK_TARGET_MASK_VAL = 1  # first detection when labeled_detections unavail
 def find_target_mask_val(labeled_dets: list | None) -> int:
     """Return the 1-based mask pixel value for the TARGET category detection.
 
+    GSAM's build_label_map encodes pixels by *position* in the final
+    (post-filter, post-sort) detection list (`enumerate(start=1)`), NOT by
+    the original GDINO `idx` carried inside each detection dict. After area
+    filtering, the two can diverge — use the labeled_dets position instead.
+
     Falls back to 1 (first detection) if labeled_detections is None or has no TARGET.
     """
     if labeled_dets:
-        for det in labeled_dets:
+        for pos, det in enumerate(labeled_dets):
             if det.get('category', '').upper() == 'TARGET':
-                return int(det['idx']) + 1  # 1-based mask encoding
+                return pos + 1  # match label_map's enumerate(start=1) encoding
     return _FALLBACK_TARGET_MASK_VAL
 
 

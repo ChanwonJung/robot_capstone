@@ -8,11 +8,15 @@
 # ($ROBOT_CAPSTONE_ROOT is set by launch_env.bash).
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# COUPLING NOTE — max_grasp_candidates
-#   This single value controls both:
-#     • vgn_grasp_node  max_grasp_candidates  (VGN Top-K output count)
-#     • BT pick_and_place.xml  RetryUntilSuccessful num_attempts={max_grasp_candidates}
-#   Edit here; vgn_params.yaml and pick_and_place.xml both derive from it.
+# DECOUPLING NOTE — grasp candidate pool vs BT retry budget
+#   • max_grasp_candidates — VGN top-K output count (grasp pool published).
+#     GraspGen's equivalent (`topk_num_grasps`) lives in graspgen_params.yaml
+#     and follows the paper-aligned default of 100.
+#   • bt_pick_retries      — BT RetryUntilSuccessful num_attempts. The BT will
+#     try at most this many published candidates in order. Decoupled from the
+#     pool size so we can publish a paper-aligned goal set (100) while keeping
+#     the BT retry budget small to avoid SIGABRT-prone goal flooding into the
+#     hybrid planner.
 # ─────────────────────────────────────────────────────────────────────────────
 
 /**:
@@ -53,7 +57,14 @@
     class_allowlist:    [0, 1, 2]   # detections passed through the filter
     halt_class_ids:     [0]         # classes that trigger E-stop (level 3)
 
-    # ── Grasp candidates (VGN ↔ BT coupling) ─────────────────────────────────
-    # vgn_grasp_node publishes at most this many candidates.
-    # BT RetryUntilSuccessful uses {max_grasp_candidates} as num_attempts.
-    max_grasp_candidates: 5
+    # ── Grasp candidate pool size (VGN top-K output) ─────────────────────────
+    # VGN publishes at most this many candidates. GraspGen has its own
+    # `topk_num_grasps` (default 100, see graspgen_params.yaml).
+    max_grasp_candidates: 100
+
+    # ── BT pick-phase retry budget ───────────────────────────────────────────
+    # BT RetryUntilSuccessful num_attempts in pick_and_place.xml. Decoupled
+    # from the grasp pool size — the published goal set can be large (paper
+    # recommends 100), but the BT only attempts the top N to avoid flooding
+    # the hybrid planner with replanning goals (SIGABRT risk).
+    bt_pick_retries: 5
