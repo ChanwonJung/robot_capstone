@@ -171,6 +171,9 @@ int main(int argc, char** argv)
 
   auto pos_tol         = node->declare_parameter<double>("position_tolerance",    0.01);
   auto max_grasp_cands = node->declare_parameter<int>("max_grasp_candidates", 5);
+  // BT pick-phase retry budget — decoupled from grasp pool size. See
+  // robot_defaults.yaml::bt_pick_retries for the rationale.
+  auto bt_pick_retries = node->declare_parameter<int>("bt_pick_retries", 5);
   auto ori_tol         = node->declare_parameter<double>("orientation_tolerance", 0.05);
   auto pre_grasp_z     = node->declare_parameter<double>("pre_grasp_z_offset",    0.12);
   auto retreat_z       = node->declare_parameter<double>("retreat_z_offset",      0.15);
@@ -197,9 +200,13 @@ int main(int argc, char** argv)
   // ── Shared state ──────────────────────────────────────────────────────────
   auto scene = std::make_shared<bt_pkg::SceneData>();
 
-  // ── Subscriptions ─────────────────────────────────────────────────────────
+  // /world_map_result 와 /grasp_candidates 는 publisher 가 TRANSIENT_LOCAL
+  // (projector, graspgen) — 마지막 메시지를 늦게 구독해도 받기 위해 QoS 매칭.
+  // BT 가 GSAM/graspgen 보다 늦게 떠도 이전 추론 결과 그대로 사용 가능.
+  auto latched_qos = rclcpp::QoS(1).transient_local().reliable();
+
   auto sub_world_map = node->create_subscription<std_msgs::msg::String>(
-    "/world_map_result", 10,
+    "/world_map_result", latched_qos,
     [scene, node](const std_msgs::msg::String::SharedPtr msg) {
       std::lock_guard<std::mutex> lk(scene->mtx);
       parse_world_map_result(msg->data, *scene);
@@ -208,7 +215,7 @@ int main(int argc, char** argv)
     });
 
   auto sub_grasp = node->create_subscription<std_msgs::msg::String>(
-    "/grasp_candidates", 10,
+    "/grasp_candidates", latched_qos,
     [scene, node](const std_msgs::msg::String::SharedPtr msg) {
       std::lock_guard<std::mutex> lk(scene->mtx);
       parse_grasp_candidates(msg->data, *scene);
@@ -356,8 +363,10 @@ int main(int argc, char** argv)
 
   // Seed blackboard with shared params so the XML can reference them as ports.
   tree.rootBlackboard()->set<int>("max_grasp_candidates", max_grasp_cands);
+  tree.rootBlackboard()->set<int>("bt_pick_retries",      bt_pick_retries);
   RCLCPP_INFO(node->get_logger(),
-    "Blackboard: max_grasp_candidates=%ld", max_grasp_cands);
+    "Blackboard: max_grasp_candidates=%ld  bt_pick_retries=%ld",
+    max_grasp_cands, bt_pick_retries);
   
   // Optional: write the tree structure to an XML file for visualization/debugging. (Groot2)
   std::ofstream("/home/hj1/robot_capstone/ros_pkgs/src/bt_pkg/behavior_trees/bt_models.xml")

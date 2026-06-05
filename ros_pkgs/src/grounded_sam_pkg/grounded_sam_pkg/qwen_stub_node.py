@@ -15,15 +15,17 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
 LABEL_TO_CATEGORY: dict[str, str] = {
-    "cup":        "TARGET",
-    "glass cup":  "TARGET",
-    "mug":        "TARGET",
-    # depth-friendly 불투명 타겟 (투명 유리컵은 depth 불안정 → centroid 튐)
-    # red ball/apple은 GDINO가 서로 혼동(둘 다 빨갛고 둥금) → 두 덩어리 검출.
-    # book은 갈색 사각형이라 단일 검출 → 안정적 centroid. 단일 타겟 권장.
+    # 책으로 데모: 2cm 두께라 panda 그리퍼 4cm 그립공간 안에 깔끔히 들어감.
+    # GraspGen Z 오차 (~18cm) 는 graspgen_node 파라미터로 음수 offset 보정.
     "book":       "TARGET",
-    "red ball":   "TARGET",
-    "ball":       "TARGET",
+    # 큰 구체는 panda 그리퍼 그립공간 4cm 보다 커서 잡지 못함 → OBSTACLE.
+    "apple":      "OBSTACLE",
+    "red ball":   "OBSTACLE",
+    "ball":       "OBSTACLE",
+    # 투명 유리컵: depth 통과 → cloud ring 형태만 잡힘 → 부적합.
+    "cup":        "OBSTACLE",
+    "glass cup":  "OBSTACLE",
+    "mug":        "OBSTACLE",
     "table":      "DESTINATION",
 }
 

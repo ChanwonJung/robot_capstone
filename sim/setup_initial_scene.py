@@ -13,7 +13,7 @@ from isaacsim.sensors.camera import SingleViewDepthSensorAsset
 from isaacsim.core.utils.stage import open_stage
 from omni.kit.viewport.utility import get_active_viewport
 from omni.kit.viewport.window import ViewportWindow, get_viewport_window_instances
-from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
+from pxr import Gf, PhysxSchema, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
 
 SIM_DIR = Path(__file__).resolve().parent
@@ -63,7 +63,10 @@ BASKET_SCALE = np.array([0.17, 0.17, 0.17])
 APPLE_SCALE = np.array([0.001, 0.001, 0.001])
 GLASS_SCALE = np.array([0.02, 0.02, 0.02])
 RED_BALL_SCALE = np.array([0.05, 0.05, 0.05])
-BOOK_SCALE = np.array([0.08, 0.08, 0.08])
+BOOK_SCALE = np.array([0.10, 0.10, 0.10])
+# 책 무게 — 평행 그리퍼 grasp 유지를 쉽게 하려고 실제(~0.35kg)보다 가볍게.
+# 마찰력 F = μ·N 이라 무게가 가벼우면 적은 grip force 로도 안 미끄러짐.
+BOOK_MASS = 0.15
 
 # Hazard placeholders for Fast Brain testing. Procedural for now; positions
 # spawn outside the top-view FOV and have initial velocity so the hazards "fly
@@ -486,7 +489,7 @@ def build_basket(stage, path):
 
 
 def build_book(stage, path):
-    root = create_dynamic_body_root(stage, path, BOOK_TRANSLATE, mass=0.35)
+    root = create_dynamic_body_root(stage, path, BOOK_TRANSLATE, mass=BOOK_MASS)
     set_xform(root, rotate_xyz_deg=BOOK_ROTATION_DEG)
     physx_rigid_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root)
     physx_rigid_body.CreateAngularDampingAttr(2.5)
@@ -676,6 +679,99 @@ def find_franka_root(stage):
         if prim.GetName().lower() == "franka":
             return prim
     return None
+
+
+# ── Gripper friction (panda fingers) ──────────────────────────────────────────
+# Isaac Sim default PhysX material friction (~0.5) is too low for reliable
+# top-down grasps of flat/thin objects (book). Boost static/dynamic friction
+# on both fingers so closed gripper holds the object during retreat & motion.
+
+FINGER_NAME_CANDIDATES = ("panda_leftfinger", "panda_rightfinger")
+GRIPPER_FRICTION_MATERIAL_PATH = "/World/PhysicsMaterials/GripperHighFriction"
+GRIPPER_STATIC_FRICTION  = 4.0   # very high — flat book slips easily otherwise
+GRIPPER_DYNAMIC_FRICTION = 3.0   # slightly lower than static
+GRIPPER_RESTITUTION      = 0.0   # no bounce
+
+
+def _ensure_gripper_friction_material(stage):
+    """Define (or fetch) the shared physics material applied to both fingers."""
+    mat_path = Sdf.Path(GRIPPER_FRICTION_MATERIAL_PATH)
+    existing = stage.GetPrimAtPath(mat_path)
+    if existing.IsValid():
+        return existing
+    # Parent /World/PhysicsMaterials Xform (no-op if already exists).
+    define_xform(stage, str(mat_path.GetParentPath()))
+    material      = UsdShade.Material.Define(stage, mat_path)
+    physics_api   = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
+    physics_api.CreateStaticFrictionAttr().Set(GRIPPER_STATIC_FRICTION)
+    physics_api.CreateDynamicFrictionAttr().Set(GRIPPER_DYNAMIC_FRICTION)
+    physics_api.CreateRestitutionAttr().Set(GRIPPER_RESTITUTION)
+    # PhysxMaterialAPI exposes friction combine mode (max takes the higher
+    # of the two contacting materials — ensures gripper friction wins even
+    # if the object's own material is slippery).
+    physx_api = PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim())
+    physx_api.CreateFrictionCombineModeAttr().Set("max")
+    physx_api.CreateRestitutionCombineModeAttr().Set("min")
+    return material.GetPrim()
+
+
+def _bind_physics_material(target_prim, material_prim):
+    """Bind a physics material to a prim (or any of its collision descendants).
+
+    Returns True if at least one binding was applied.
+    """
+    bound_any = False
+    for prim in Usd.PrimRange(target_prim):
+        # Bind to anything that participates in physics — collision prims
+        # are the surfaces the gripper actually touches. Binding on the
+        # finger root alone doesn't always propagate down through nested
+        # collision meshes, so we walk the subtree.
+        if prim.HasAPI(UsdPhysics.CollisionAPI):
+            binding_api = UsdShade.MaterialBindingAPI.Apply(prim)
+            binding_api.Bind(
+                UsdShade.Material(material_prim),
+                bindingStrength=UsdShade.Tokens.weakerThanDescendants,
+                materialPurpose="physics",
+            )
+            bound_any = True
+    if not bound_any:
+        # Fallback: bind to the root prim directly — covers cases where
+        # collisions are defined via PhysxCookedDataAPI or similar without
+        # an explicit CollisionAPI marker.
+        binding_api = UsdShade.MaterialBindingAPI.Apply(target_prim)
+        binding_api.Bind(
+            UsdShade.Material(material_prim),
+            bindingStrength=UsdShade.Tokens.weakerThanDescendants,
+            materialPurpose="physics",
+        )
+        bound_any = True
+    return bound_any
+
+
+def apply_gripper_friction(stage):
+    """Apply the high-friction PhysX material to both Panda fingers."""
+    franka_root = find_franka_root(stage)
+    if franka_root is None:
+        print("[gripper-friction] Franka root not found — skipped")
+        return
+
+    material_prim = _ensure_gripper_friction_material(stage)
+    applied = []
+    for finger_name in FINGER_NAME_CANDIDATES:
+        finger_prim = find_descendant_by_candidates(franka_root, [finger_name])
+        if finger_prim is None:
+            print(f"[gripper-friction] {finger_name} not found under Franka")
+            continue
+        if _bind_physics_material(finger_prim, material_prim):
+            applied.append(str(finger_prim.GetPath()))
+
+    if applied:
+        print(
+            f"[gripper-friction] static={GRIPPER_STATIC_FRICTION} "
+            f"dynamic={GRIPPER_DYNAMIC_FRICTION} bound to: {applied}"
+        )
+    else:
+        print("[gripper-friction] No fingers found — material defined but unbound")
 
 
 def find_descendant_by_candidates(root_prim, candidates):
@@ -944,6 +1040,7 @@ def apply_scene():
     if table_prim and table_prim.IsValid():
         table_prim.SetActive(False)
     build_tabletop_items(stage, f"{additions_root.GetPath()}/TabletopItems")
+    apply_gripper_friction(stage)
     # === Mode toggle ===
     # Capture mode  : `build_capture_humans` ON, `build_hazards` OFF
     # Hazard mode   : `build_capture_humans` OFF, `build_hazards` ON (default flight scenario)

@@ -14,13 +14,15 @@
 
   Pick phase retry logic:
     RetryUntilSuccessful reads num_attempts from the blackboard key
-    {max_grasp_candidates}, which bt_executor_node sets from the ROS parameter
-    max_grasp_candidates (default 5, defined in robot_defaults.yaml).
-    This is coupled to vgn_grasp_node's max_grasp_candidates so the retry
-    budget always equals the VGN candidate pool.
+    {bt_pick_retries}, which bt_executor_node sets from the ROS parameter
+    bt_pick_retries (default 5, defined in robot_defaults.yaml).
+    This is *decoupled* from the grasp pool size — the grasp publisher may
+    expose up to 100 candidates (paper-aligned goal set), but the BT only
+    attempts the top N to avoid SIGABRT-prone goal flooding into the
+    hybrid planner.
     SelectGraspCandidate advances the candidate index on each call;
     returning FAILURE when exhausted burns through remaining retry slots
-    cleanly. After all 5 attempts fail, Fallback escalates to Pick Recovery.
+    cleanly. After all attempts fail, Fallback escalates to Pick Recovery.
 
   RequestReplan intentionally returns FAILURE to propagate failure through
   Pick Recovery → Pick Fallback → Main Pipeline → RepeatForever re-ticks
@@ -29,7 +31,15 @@
 <root BTCPP_format="4">
   <BehaviorTree ID="PickAndPlace">
 
+    <!--
+      Inverter trick: KeepRunningUntilFailure exits on FAILURE. We want it
+      to exit when the inner pipeline reaches SUCCESS (= grasp + retreat
+      done). Inverter flips SUCCESS↔FAILURE so:
+        inner SUCCESS  → Inverter FAILURE → outer EXIT  (one-shot demo done)
+        inner FAILURE  → Inverter SUCCESS → outer RUNNING → restart (retry)
+    -->
     <KeepRunningUntilFailure>
+      <Inverter>
       <ReactiveSequence name="E-Stop Guard">
 
         <!-- Checked every 100 ms. FAILURE suspends the entire tree. -->
@@ -52,20 +62,51 @@
               Fallback escalates to Pick Recovery.
             -->
             <ReactiveSequence name="Visibility Guard">
-              <TargetVisible/>
+              <!-- TargetVisible temporarily replaced with AlwaysSuccess:
+                   YOLO model only knows arm/bottle/box (3 classes). For non-
+                   YOLO targets (e.g. book/cup from GSAM/Qwen), the live
+                   /yolo/target_centroid is never published, so TargetVisible
+                   always reports stale. Bypass for demo runs that pick GSAM
+                   targets outside YOLO's vocab. Revert before integrating
+                   with hazard tracking. -->
+              <AlwaysSuccess/>
 
               <!--
-                Retries = max_grasp_candidates (from robot_defaults.yaml, default 5).
-                Each SelectGraspCandidate call advances the VGN candidate index,
-                so each retry tries the next-best grasp.
+                Retries = bt_pick_retries (robot_defaults.yaml, default 5).
+                Each SelectGraspCandidate call advances the grasp candidate
+                index, so each retry tries the next-best published grasp.
+                The published pool itself may be much larger than this
+                budget (paper-aligned top-100 for GraspGen) — the BT only
+                attempts the top N candidates here.
               -->
-              <RetryUntilSuccessful num_attempts="{max_grasp_candidates}">
+              <RetryUntilSuccessful num_attempts="{bt_pick_retries}">
                 <Sequence name="Pick Attempt">
                   <SelectGraspCandidate/>
-                  <MoveAction pose_key="pre_grasp_pose" speed="0.3"/>
-                  <MoveAction pose_key="grasp_pose"     speed="0.1"/>
+                  <!-- Open BEFORE approach so a previously failed close
+                       (fingers stuck closed on air) doesn't prevent this
+                       attempt from re-acquiring an open jaw. -->
+                  <GripperAction command="open"/>
+                  <!-- pre_grasp: home → pre_grasp 자세 변화 큼.
+                       lock_orientation=true + tol=1.0rad(57°) — wrist 한 바퀴
+                       도는 path 만 차단, 자연스러운 정렬은 허용.
+                       lock_base_joints=false — base 도 어느정도 움직여야 도달.
+                       min_path_z=0.15 — OMPL 이 책 옆 아래로 path 만드는 것
+                       방지. 책 top (z~0.05~0.10) 보다 충분히 위에서만 sampling.
+                       pre_grasp 자체 z (~0.22) 보다 약간 낮아 도달 가능. -->
+                  <MoveAction pose_key="pre_grasp_pose" speed="0.3"
+                              lock_orientation="true" lock_orientation_tol="1.0"
+                              lock_base_joints="false"
+                              min_path_z="0.15"/>
+                  <!-- grasp: pre_grasp → grasp 직선 descent.
+                       lock_orientation=true + tol=0.2rad(11°) — strict. -->
+                  <MoveAction pose_key="grasp_pose"     speed="0.1"
+                              lock_orientation="true" lock_orientation_tol="0.2"
+                              lock_base_joints="true"/>
                   <GripperAction command="close"/>
-                  <MoveAction pose_key="retreat_pose"   speed="0.2"/>
+                  <!-- retreat: 잡은 상태 직선 상승. strict. -->
+                  <MoveAction pose_key="retreat_pose"   speed="0.2"
+                              lock_orientation="true" lock_orientation_tol="0.2"
+                              lock_base_joints="true"/>
                 </Sequence>
               </RetryUntilSuccessful>
 
@@ -84,18 +125,13 @@
 
           </Fallback>
 
-          <!-- ─── DESTINATION UPDATE ─────────────────────────────────── -->
-          <!--
-            After the target is grasped, compute the place pose from:
-              - /qwen/grounding_result (destination_spec on blackboard)
-              - /yolo/world_map (live 3D positions of destination objects)
-            Falls back to initial /world_map_result centroid if YOLO has no match.
-          -->
+          <!-- ─── DESTINATION + PLACE 단계 (임시 비활성화) ─────────────────
+               Qwen stub은 destination grounding을 채우지 않아 place_pose가
+               (0,0,0)이 되어 place 단계가 매번 실패함. 데모는 "grasp →
+               retreat까지 잡고 멈춤"으로 단순화. 차주에 Qwen 실 노드 또는
+               하드코딩 park-pose 추가로 복원 예정.
           <UpdateTargetPose/>
-
-          <!-- ─── PLACE PHASE ────────────────────────────────────────── -->
           <Fallback name="Place or Recover">
-
             <RetryUntilSuccessful num_attempts="3">
               <Sequence name="Place Attempt">
                 <MoveAction pose_key="place_pose"   speed="0.3"/>
@@ -103,17 +139,18 @@
                 <MoveAction pose_key="retreat_pose" speed="0.2"/>
               </Sequence>
             </RetryUntilSuccessful>
-
-            <!--
-              All place attempts failed while holding the object.
-              Return to home and await operator intervention.
-            -->
             <MoveToHome speed="0.5"/>
-
           </Fallback>
+          -->
+
+          <!-- 잡은 후 retreat 자세 그대로 유지하며 main pipeline 종료.
+               외곽 KeepRunningUntilFailure 가 다시 tick하지만 이후 시도는
+               책이 그리퍼에 있어 무해하게 실패함. -->
+          <AlwaysSuccess/>
 
         </Sequence>
       </ReactiveSequence>
+      </Inverter>
     </KeepRunningUntilFailure>
 
   </BehaviorTree>

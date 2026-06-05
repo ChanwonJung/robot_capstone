@@ -11,8 +11,17 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from std_msgs.msg import Header, String
+
+# /world_map_result 는 Slow Brain 의 1회성 결과 — 한 번 발행 후 BT 가 늦게
+# 구독해도 마지막 메시지 받도록 TRANSIENT_LOCAL. depth=1 (최신 1개만 보관).
+_LATCHED_QOS = QoSProfile(
+    depth=1,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+)
 
 from .cloud_builder import build_pointcloud2
 from .label_mapper import CategoryPoints
@@ -58,6 +67,10 @@ class MultiViewProjectorNode(Node):
         self.declare_parameter('ee_seg_z_margin',         0.10)   # metres — Z gate for seg filter
         self.declare_parameter('free_unknown_xy_radius',  0.05)   # metres — Pass 2 XY radius
         self.declare_parameter('free_unknown_z_margin',   0.10)   # metres — Pass 2 Z gate
+        # 한 번 publish 후 새 mask 입력 무시 (true) — robot 이 움직여 EE 카메라 시점이
+        # 바뀌면 정적 extrinsics 가 깨져 재투영이 망가짐 ([[project-slow-brain-static-extrinsics]]).
+        # 첫 발행 후 freeze 하면 BT 가 일관된 데이터로 끝까지 작업 가능.
+        self.declare_parameter('freeze_after_first_publish', False)
 
         _default_extrinsics = os.path.join(
             get_package_share_directory('mask_projection_pkg'),
@@ -81,6 +94,8 @@ class MultiViewProjectorNode(Node):
         self._free_unknown_xy_radius  = self.get_parameter('free_unknown_xy_radius').value
         self._free_unknown_z_margin   = self.get_parameter('free_unknown_z_margin').value
         self._initials                = self.get_parameter('initials').value
+        self._freeze_after_first      = bool(self.get_parameter('freeze_after_first_publish').value)
+        self._frozen                  = False
         extrinsics_path        = self.get_parameter('extrinsics_config').value
         # launch file may pass '' (empty string) → fall back to package default
         if not extrinsics_path:
@@ -121,7 +136,10 @@ class MultiViewProjectorNode(Node):
 
         # ── publishers ────────────────────────────────────────────────────────
         self._pub_cloud     = self.create_publisher(PointCloud2, output_cloud_topic,     10)
-        self._pub_result    = self.create_publisher(String,      output_result_topic,    10)
+        # /world_map_result 만 latched — Slow Brain 결과를 BT 가 늦게 받아도 됨.
+        # PointCloud2 들은 RViz 표시용이라 VOLATILE 유지 (latching 시 RViz 가
+        # 오래된 cloud 누적 표시할 수 있어 의도와 다름).
+        self._pub_result    = self.create_publisher(String,      output_result_topic,    _LATCHED_QOS)
         self._pub_raw_cloud = self.create_publisher(PointCloud2, output_raw_cloud_topic, 10)
 
         self.get_logger().info(
@@ -154,6 +172,10 @@ class MultiViewProjectorNode(Node):
     # ── trigger callback ──────────────────────────────────────────────────────
 
     def _mask_cb(self, mask_msg: Image) -> None:
+        # Freeze mode: 한 번 publish 한 뒤로 신규 mask 전부 drop. latched QoS 가
+        # 마지막 발행을 BT 에 영원히 노출하므로 추가 갱신은 오히려 해로움.
+        if self._frozen:
+            return
         # EE camera is required — top camera is optional (degrades gracefully)
         if self._ee_depth is None or self._ee_info is None:
             self.get_logger().warn('Waiting for EE camera depth/camera_info...')
@@ -217,6 +239,11 @@ class MultiViewProjectorNode(Node):
         self._pub_cloud.publish(build_pointcloud2(header, all_category_points))
         self._pub_result.publish(String(data=build_result_json(all_category_points)))
         self._pub_raw_cloud.publish(self._build_raw_cloud(header, all_category_points))
+
+        # 첫 발행 후 freeze — 이후 mask 입력은 모두 무시.
+        if self._freeze_after_first and not self._frozen:
+            self._frozen = True
+            self.get_logger().info('FROZEN — 이후 mask 입력 무시. latched /world_map_result 그대로 유지.')
 
         # ── save PLY to disk ──────────────────────────────────────────────────
         stamp  = self._ee_depth.header.stamp.sec
