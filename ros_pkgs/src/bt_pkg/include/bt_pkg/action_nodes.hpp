@@ -101,6 +101,25 @@ public:
       BT::InputPort<std::string>("pose_key", "grasp_pose",
                                  "Blackboard key for target PoseStamped"),
       BT::InputPort<double>("speed", 0.3, "max_velocity_scaling_factor"),
+      // true 면 trajectory 중 EE orientation 을 target 과 거의 동일하게 유지.
+      // tolerance 는 lock_orientation_tol (rad) 로 별도 조정.
+      // pre_grasp 처럼 자세 변화 큰 경우 tol 0.8~1.0 (≈45~57°) — wrist 한
+      // 바퀴 돌 정도는 아니되 자연스러운 정렬 허용.
+      // grasp/retreat 처럼 직선 segment 는 tol 0.2 (≈11°) — strict.
+      BT::InputPort<bool>("lock_orientation", false,
+                          "Constrain EE orientation along the path"),
+      BT::InputPort<double>("lock_orientation_tol", 0.3,
+                            "Orientation tolerance in rad when lock_orientation=true"),
+      // true 면 base 쪽 joints (joint_1, 2, 3) 의 현재 값을 path 동안 ±0.3rad
+      // 안 유지. 끝쪽 joints (4~7) 는 자유. 큰 자세 변화 필요한 segment
+      // (home → pre_grasp) 에서는 fail 위험 — false 권장.
+      BT::InputPort<bool>("lock_base_joints", false,
+                          "Constrain base joints (1,2,3) along the path"),
+      // path 동안 EE link 의 z 가 이 값 이상 유지되도록 강제. OMPL 이 책의
+      // 존재를 모르므로 책 옆/아래로 path 가 만들어지는 문제 (object collision
+      // object 미주입) 를 우회. 0.0 면 비활성. 책 top 위 5cm 정도 권장.
+      BT::InputPort<double>("min_path_z", 0.0,
+                            "Floor for EE z along the path (in planning_frame); 0=disabled"),
     });
   }
 

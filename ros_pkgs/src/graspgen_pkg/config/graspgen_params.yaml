@@ -5,12 +5,51 @@ graspgen_node:
     # e.g. aurora-g5: ssh -N -L 5556:aurora-g5:5556 <user>@aurora.khu.ac.kr
     zmq_host: '127.0.0.1'
     zmq_port: 5556
-    zmq_timeout_ms: 5000
+    # Scale with num_grasps — diffusion inference on aurora-g5 is roughly
+    # linear in batch size. 30000 ms covers num_grasps up to ~512.
+    zmq_timeout_ms: 30000
 
     # ── inference parameters ──────────────────────────────────────────────────
-    num_grasps: 50          # 서버에 요청할 총 grasp 후보 수
-    topk_num_grasps: 5      # 발행할 상위 K개 (BT max_grasp_candidates와 맞춤)
+    # Paper-aligned defaults (Sundaralingam et al., 2025, §5.1 + Fig. 14):
+    #   • num_grasps      = diffusion sampling batch — larger is better when
+    #                       min_quality is high (paper Fig. 14).
+    #   • topk_num_grasps = 100 grasps published as a "goal set" — paper
+    #                       explicitly recommends this over NMS for downstream
+    #                       motion planners ("inference without non-maximal
+    #                       suppression was better").
+    #   • min_quality     = confidence threshold ≥ 0.5 (paper §6.10).
+    # BT 재시도 횟수는 robot_defaults.yaml의 bt_pick_retries로 분리됨.
+    num_grasps: 200         # 서버에 요청할 diffusion sampling batch
+    topk_num_grasps: 100    # 서버가 발행하는 confidence top-K (paper 권장)
+    min_quality: 0.5        # 클라이언트 confidence 컷오프 (paper 권장 ≥ 0.5)
     gripper_width: 0.08     # Panda 기본 gripper 폭 (m)
+
+    # ── Client-side filter stack (Option A) ───────────────────────────────────
+    # The paper expects a goal-set-aware planner (cuRobo); our MoveIt + BT
+    # stack is single-goal sequential. We pre-filter the paper's 100-grasp
+    # goal set down to a small reachable subset before publishing to the BT.
+    # See grasp_filter.py for the implementation.
+
+    # Top-down approach filter: keep grasps whose gripper +Z is within this
+    # many degrees of straight-down. Tuned for packed tabletop where side
+    # grasps risk colliding with neighbouring objects. 90 disables.
+    top_down_filter_enabled: true
+    top_down_angle_deg:      45.0
+
+    # IK feasibility filter: drop grasps unreachable by Panda IK via
+    # MoveIt's /compute_ik. Strongest filter — eliminates goals the BT
+    # could never reach and that risk SIGABRT in hybrid planning.
+    ik_filter_enabled:       true
+    ik_service_name:         '/compute_ik'
+    ik_planning_group:       'panda_arm'
+    ik_ee_link:              'panda_link8'
+    ik_per_call_timeout_sec: 0.10   # per-grasp IK budget
+    ik_service_wait_sec:     5.0    # startup wait for MoveIt
+
+    # Final cap on the published pool size. Keep small (BT-friendly).
+    # bt_pick_retries (robot_defaults.yaml) defines the actual retry count;
+    # this is the upper bound on what BT can see.
+    max_published_grasps:    10
 
     # ── point cloud extraction ────────────────────────────────────────────────
     min_point_count: 50     # TARGET 포인트 최소 수 (이하면 skip)
