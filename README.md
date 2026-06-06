@@ -57,7 +57,7 @@ To ensure simulation stability, the system uses a distributed ROS 2 network over
 | Node | Hardware | Primary Role |
 |---|---|---|
 | **Simulation Node** | RTX 5070 (12 GB) | Isaac Sim, ROS 2 Orchestration, MoveIt |
-| **AI Inference Node** | 16× RTX 4090 Cluster | LLM, Grounding DINO, Qwen VLM API |
+| **AI Inference Node** | 16× RTX 3090  | LLM, Grounding DINO, Qwen VLM API |
 | **Development Node** | RTX 4070 Super (12 GB) | YOLO Tracking, RViz Visualization |
 
 ---
@@ -145,6 +145,6 @@ ros2 topic pub --once /target_pose_executor/reset std_msgs/msg/Empty "{}"
 
 | Name | Role |
 |---|---|
-| **Chanwon Jeong** | ROS 2 Architecture & MoveIt Motion Planning |
-| **Sanghyun Park** | Simulation Environment & Sensor Fusion |
-| **Jaewon Heo** | Perception Pipeline & VLM Integration |
+| **Chanwon Jeong** | System Integration & MoveIt Motion Planning & Yolo |
+| **Sanghyun Park** | G-SAM & Grasp Gen & Sensor Fusion |
+| **Jaewon Heo** | QWEN & Behavior Tree |
