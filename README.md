@@ -105,30 +105,66 @@ To ensure simulation stability, the system uses a distributed ROS 2 network over
 
 ### Run sequence (each command in its own terminal)
 
-1. **Isaac Sim scene**
+1. **T1 — MoveIt hybrid planner** (venv OFF)
    ```bash
-   ./sim/run_capstone_scene.sh
+   source ~/robot_capstone/launch_env.bash
+   ros2 launch moveit_isaac_bridge_pkg hybrid_planning.launch.py
    ```
 
-2. **Grounded-SAM dual-view perception** — must run inside `gsam_venv`
+2. **T2 — Static TF (`panda_link0 = world`)** (venv OFF)
    ```bash
-   source gsam_venv/bin/activate
-   ros2 launch grounded_sam_pkg grounded_sam_dual.launch.py
+   source ~/robot_capstone/launch_env.bash
+   ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 panda_link0 world
    ```
 
-3. **Mask projection → labeled point cloud** (publishes `/world_map_result`)
+3. **T3 — Grounded-SAM** (venv ON)
    ```bash
-   ros2 launch mask_projection_pkg multi_view_projector.launch.py
+   source ~/robot_capstone/launch_env.bash
+   source ~/robot_capstone/gsam_venv/bin/activate
+   ros2 launch grounded_sam_pkg grounded_sam_dual.launch.py prompt:="book"
    ```
 
-4. **Target pose bridge + MoveIt + RViz**
+4. **T4 — Qwen stub labeling** (venv OFF)
    ```bash
-   ros2 launch moveit_isaac_bridge_pkg capstone_pick_pipeline.launch.py
+   source ~/robot_capstone/launch_env.bash
+   ros2 run grounded_sam_pkg qwen_stub_node
    ```
 
-5. **MoveIt executor** — subscribes to `/grasp_target_pose`, plans + executes Panda arm motion
+5. **T5 — Mask projector** (venv ON)
    ```bash
-   ros2 launch moveit_isaac_bridge_pkg target_pose_executor.launch.py
+   source ~/robot_capstone/launch_env.bash
+   source ~/robot_capstone/gsam_venv/bin/activate
+   ros2 launch mask_projection_pkg multi_view_projector.launch.py \
+     ee_depth_topic:=/ee_rgbd_camera/depth_image \
+     ee_camera_info_topic:=/ee_rgbd_camera/camera_info \
+     top_depth_topic:=/rgbd_camera/depth_image \
+     top_camera_info_topic:=/rgbd_camera/camera_info \
+     freeze_after_first_publish:=true
+   ```
+
+6. **T6 — GraspGen client** (venv OFF)
+   ```bash
+   source ~/robot_capstone/launch_env.bash
+   ros2 run graspgen_pkg graspgen_node --ros-args \
+     --params-file $ROBOT_CAPSTONE_ROOT/ros_pkgs/install/graspgen_pkg/share/graspgen_pkg/config/graspgen_params.yaml \
+     -p extrinsics_config:=$ROBOT_CAPSTONE_ROOT/ros_pkgs/src/mask_projection_pkg/config/camera_extrinsics.yaml \
+     -p ee_depth_topic:=/ee_rgbd_camera/depth_image \
+     -p ee_camera_info_topic:=/ee_rgbd_camera/camera_info \
+     -p zmq_port:=8000 \
+     -p top_down_angle_deg:=45.0 \
+     -p ik_filter_enabled:=false \
+     -p override_xy_with_bbox_center:=true \
+     -p force_top_down_orientation:=true \
+     -p freeze_after_first_publish:=true
+   ```
+
+7. **T7 — Behavior Tree** (venv OFF)
+   ```bash
+   source ~/robot_capstone/launch_env.bash
+   ros2 run bt_pkg bt_executor_node --ros-args \
+     -p extrinsics_config:=$ROBOT_CAPSTONE_ROOT/ros_pkgs/src/mask_projection_pkg/config/camera_extrinsics.yaml \
+     -p bt_pick_retries:=1 \
+     -p pre_grasp_z_offset:=0.08
    ```
 
 ### Re-arm for the next command
