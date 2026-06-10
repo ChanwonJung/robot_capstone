@@ -78,6 +78,15 @@ Single package:
 cd ros_pkgs && colcon build --symlink-install --packages-select bt_pkg
 ```
 
+**Post-rebuild shebang fix (grounded_sam_pkg only)**: After every rebuild of `grounded_sam_pkg`, colcon resets entry-script shebangs to system Python, which lacks `torch`. Fix before launching:
+```bash
+VENV_PY="$PWD/gsam_venv/bin/python"
+for f in $(find ros_pkgs/install/grounded_sam_pkg/lib -maxdepth 3 -type f -executable); do
+  head -1 "$f" | grep -q "^#!/usr/bin/python3$" && \
+    sed -i "1s|^#!/usr/bin/python3$|#!${VENV_PY}|" "$f"
+done
+```
+
 ### Run tests
 ```bash
 cd ros_pkgs
@@ -164,11 +173,15 @@ ros_pkgs/src/
 ├── qwen_pkg/               Slow Brain VLM — Qwen grounding + instruction input
 ├── mask_projection_pkg/    2D mask + depth → labeled 3D PointCloud2
 ├── vgn_grasp_pkg/          Slow Brain grasp detection — TSDF + VGN inference
-├── target_pose_bridge_pkg/ /world_map_result → MoveIt goal poses (centroid-based)
+├── target_pose_bridge_pkg/ /world_map_result → MoveIt goal poses (centroid-based, legacy)
 ├── moveit_isaac_bridge_pkg/MoveIt + Isaac Sim joint bridge + gripper action server
-├── bt_pkg/                 BehaviorTree.ROS2 pick-and-place executor  ← NEW
+├── yolo_hazard_pkg/        Fast Brain hazard detection — YOLO on both cameras >30 FPS
+├── bt_pkg/                 BehaviorTree.ROS2 pick-and-place executor
+├── graspgen_pkg/           Legacy grasp generation via ZMQ — superseded by vgn_grasp_pkg
 └── behavior_tree/          BehaviorTree.ROS2 vendored library (do not modify)
 ```
+
+See `ROS_NODES.md` for a full per-node topic/action reference.
 
 ### Unified parameter file
 
@@ -220,7 +233,7 @@ MoveIt  →  hybrid_command_bridge_node  →  /joint_command  →  Isaac Sim
 
 **Dual-view with one model instance** — `grounded_sam_dual.launch.py` runs a single `GroundedSAMNode` subscribed to both EE and Top cameras. Top images are cached; the EE callback drives both views sequentially through the same pipeline.
 
-**Stub vs real Qwen** — `qwen_stub_node` (in `grounded_sam_pkg`) uses a hardcoded `LABEL_TO_CATEGORY` dict and requires no cluster. `qwen_bridge_node` (in `qwen_pkg`) calls the real VLM. Both publish identical topic schemas — `mask_projection_pkg` requires no changes to swap between them.
+**Stub vs real Qwen** — `qwen_stub_node` (in `grounded_sam_pkg`) uses a hardcoded `LABEL_TO_CATEGORY` dict and requires no cluster. `qwen_bridge_node` (in `qwen_pkg`) calls the real VLM. They are **not** drop-in replacements for `bt_pkg`: the stub only publishes `/qwen/labeled_detections` and `/qwen/mask_image` — it does **not** publish `/qwen/grounding_result`, so `bt_executor_node`'s `destination_spec` (`SceneData`) is never populated and `UpdateTargetPose` will fail. The stub is sufficient to test the Slow Brain pipeline up to the projection step; use the real `qwen_bridge_node` when running the full BT pipeline. `mask_projection_pkg` itself requires no changes to swap between them.
 
 **`projection_engine.py` is ROS-free** — all numpy projection/filter math lives there. `multi_view_projector_node.py` only handles ROS message decode/encode. Keep it that way.
 
@@ -239,7 +252,7 @@ See `ros_pkgs/src/bt_pkg/README.md` for full detail. Key points:
 - `SceneData` (mutex-guarded struct) is the only shared state between the ROS subscription callbacks and BT node `tick()` calls — nothing goes through the blackboard except computed poses and indices
 - `RequestReplan` returns `FAILURE` intentionally to restart the pipeline from `WaitForScene` via `RepeatForever` — this is not a bug
 - `MoveAction` must populate `start_state.joint_state` from `SceneData::latest_joint_state` before sending the hybrid planner goal
-- `behaviortree_ros2` is vendored at `ros_pkgs/src/behavior_tree/`; `behaviortree_cpp` (core C++ lib) must be apt-installed separately
+- `behaviortree_ros2` is vendored at `ros_pkgs/src/behavior_tree/BehaviorTree.ROS2/`; `behaviortree_cpp` (BT.cpp v4 core) is a git submodule at `ros_pkgs/src/BehaviorTree.CPP/` — both are built by colcon, no separate apt install needed beyond the system deps listed in Initial setup
 
 ### grounded_sam_pkg internals
 
