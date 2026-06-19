@@ -174,7 +174,10 @@ ros_pkgs/src/
 
 `config/robot_defaults.yaml` (repo root) is the single source of truth for shared robot identity parameters. All launch files load it first; package YAMLs override only what is package-specific. `$ROBOT_CAPSTONE_ROOT` (set by `launch_env.bash`) points to the repo root.
 
-**`max_grasp_candidates` is coupled** — it lives only in `robot_defaults.yaml` and controls both VGN's Top-K output count and the BT's `RetryUntilSuccessful` retry budget. Change it in one place only.
+**Grasp pool vs BT retry budget — decoupled.** `robot_defaults.yaml` carries both:
+
+- `max_grasp_candidates` — VGN top-K output count (grasp pool size). GraspGen has its own `topk_num_grasps` in `graspgen_pkg/config/graspgen_params.yaml` (default 100, paper-aligned).
+- `bt_pick_retries` — BT `RetryUntilSuccessful` num_attempts in `pick_and_place.xml`. The BT only attempts the top-N published candidates, regardless of pool size. Keep small to avoid SIGABRT-prone goal flooding into the hybrid planner.
 
 ### Full data flow
 

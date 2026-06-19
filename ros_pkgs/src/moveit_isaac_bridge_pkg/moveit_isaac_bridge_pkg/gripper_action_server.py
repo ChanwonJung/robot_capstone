@@ -37,6 +37,14 @@ FINGER_JOINTS   = ["panda_finger_joint1", "panda_finger_joint2"]
 OPEN_POS_M      = 0.04   # m per finger (0.08 m total opening)
 CLOSE_POS_M     = 0.0    # m per finger (fully closed)
 
+# hybrid_command_bridge_node forwards only the 7 arm joints to /joint_command.
+# Isaac's SubscribeJointState applies positionCommand selectively per jointNames
+# in the message, so publishing a 2-joint finger-only JointState does not
+# disturb the arm trajectory currently being executed.
+JOINT_COMMAND_TOPIC = "/joint_command"
+DIRECT_PUBLISH_HZ   = 30.0
+DIRECT_PUBLISH_SEC  = 0.5    # republish duration to survive arm-traj interleave
+
 
 class GripperActionServer(Node):
     def __init__(self) -> None:
@@ -60,6 +68,13 @@ class GripperActionServer(Node):
         self._finger_pos: dict[str, float] = {j: OPEN_POS_M for j in FINGER_JOINTS}
         self._js_lock = threading.Lock()
         self.create_subscription(JointState, "/joint_states", self._js_cb, 10)
+
+        # Direct /joint_command publisher for finger joints. MoveIt's planned
+        # trajectory for panda_hand never reaches Isaac because
+        # hybrid_command_bridge_node only forwards arm joints — see comment on
+        # JOINT_COMMAND_TOPIC at module top.
+        self._joint_cmd_pub = self.create_publisher(
+            JointState, JOINT_COMMAND_TOPIC, 10)
 
         # MoveIt action client for panda_hand group
         self._cb_group = ReentrantCallbackGroup()
@@ -95,6 +110,28 @@ class GripperActionServer(Node):
     def _avg_finger_pos(self) -> float:
         with self._js_lock:
             return sum(self._finger_pos.values()) / len(self._finger_pos)
+
+    # ── direct /joint_command publish ─────────────────────────────────────
+
+    def _publish_finger_command(self, target_pos: float) -> None:
+        """Publish finger target on /joint_command for Isaac.
+
+        Repeats DIRECT_PUBLISH_HZ for DIRECT_PUBLISH_SEC to remain sticky
+        even if hybrid_command_bridge interleaves arm trajectory points on
+        the same topic.
+        """
+        msg = JointState()
+        msg.name     = list(FINGER_JOINTS)
+        msg.position = [float(target_pos)] * len(FINGER_JOINTS)
+        msg.velocity = [0.0] * len(FINGER_JOINTS)
+        msg.effort   = [0.0] * len(FINGER_JOINTS)
+
+        dt     = 1.0 / DIRECT_PUBLISH_HZ
+        cycles = max(1, int(DIRECT_PUBLISH_SEC * DIRECT_PUBLISH_HZ))
+        for _ in range(cycles):
+            msg.header.stamp = self.get_clock().now().to_msg()
+            self._joint_cmd_pub.publish(msg)
+            time.sleep(dt)
 
     # ── MoveIt helper ─────────────────────────────────────────────────────
 
@@ -162,8 +199,15 @@ class GripperActionServer(Node):
             f"(target={target*1000:.1f}mm)"
         )
 
-        # Send the finger trajectory. Even if MoveIt planning fails we still
-        # poll joint_states because Isaac Sim may have executed a partial move.
+        # Direct /joint_command publish first — this is what actually moves
+        # the fingers in Isaac. MoveIt MoveGroup below is kept for collision
+        # validation and to keep the planning scene up to date, but its plan
+        # never reaches Isaac on its own (see module-level note).
+        self._publish_finger_command(target)
+
+        # Send the finger trajectory through MoveIt as well. Even if MoveIt
+        # planning fails we still poll joint_states because the direct
+        # publish above should have driven Isaac to the target.
         ok = self._move_fingers(target)
         if not ok:
             self.get_logger().warn("Finger MoveIt planning failed — polling contact anyway")

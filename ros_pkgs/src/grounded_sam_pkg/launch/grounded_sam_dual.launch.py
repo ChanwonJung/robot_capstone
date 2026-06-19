@@ -31,10 +31,18 @@ def generate_launch_description():
     # EE-view 탐지 프롬프트. 투명 유리컵은 depth가 불안정해 centroid가 튀므로,
     # 불투명 물체(red ball / apple / book)로 덮어쓰기:  prompt:="red ball"
     prompt_arg = DeclareLaunchArgument("prompt", default_value="glass cup")
+    # Slow Brain 페이싱. 정적 EE extrinsics 전제 — 한 번 관찰 후 재실행 시
+    # EE 카메라가 이동해 extrinsics 가 더 이상 유효하지 않으면 world cloud 가
+    # 엉뚱한 좌표로 투영됨. 기본 10초는 너무 짧아 pick-and-place 도중 재투영
+    # → 책 좌표가 사라지는 증상 발생. CLI 로 충분히 크게 override 권장.
+    interval_arg = DeclareLaunchArgument("min_process_interval_sec", default_value="10.0")
+    frames_arg   = DeclareLaunchArgument("process_every_n_frames",   default_value="60")
 
     return LaunchDescription(
         [
             prompt_arg,
+            interval_arg,
+            frames_arg,
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(grounded_sam_launch),
                 launch_arguments={
@@ -58,9 +66,9 @@ def generate_launch_description():
                     "top_depth_topic": "",
                     "top_min_depth": "0.0",
                     "top_max_depth": "100.0",
-                    # Slow Brain pacing
-                    "process_every_n_frames": "60",
-                    "min_process_interval_sec": "10.0",
+                    # Slow Brain pacing (CLI override 가능)
+                    "process_every_n_frames":   LaunchConfiguration("process_every_n_frames"),
+                    "min_process_interval_sec": LaunchConfiguration("min_process_interval_sec"),
                     "output_subdir": "dual_view",
                 }.items(),
             ),
