@@ -42,6 +42,7 @@ from .zmq_client import GraspGenClient, check_deps
 from .depth_utils import (decode_depth, decode_mask, extract_K,
                            load_ee_extrinsics, apply_world_to_robot_tf)
 from .cloud_extractor import find_target_mask_val, extract_target_cloud
+from .swindrnet_client import SwinDRNetClient
 from .marker_publisher import build_grasp_markers, build_target_cloud_msg
 from .grasp_filter import (
     top_down_filter, confidence_top_n, IKFeasibilityChecker)
@@ -64,6 +65,7 @@ class GraspGenNode(Node):
         self._load_params()
         self._init_extrinsics()
         self._init_zmq()
+        self._init_swindrnet()
         self._init_tf()
         self._init_cache()
         self._init_pubsub()
@@ -170,6 +172,7 @@ class GraspGenNode(Node):
         p('max_published_grasps',     10)
         p('ee_depth_topic',           '/ee_camera/depth_image')
         p('ee_camera_info_topic',     '/ee_camera/camera_info')
+        p('ee_camera_rgb_topic',      '/ee_camera/image_raw')
         p('mask_topic',               '/qwen/mask_image')
         p('labeled_detections_topic', '/qwen/labeled_detections')
         p('world_map_result_topic',   '/world_map_result')
@@ -180,6 +183,23 @@ class GraspGenNode(Node):
         # 한 번 publish 후 새 /world_map_result 입력 무시 (true) — projector freeze
         # 와 함께 쓰면 이중 방어. ZMQ 추론 비용도 아낌.
         p('freeze_after_first_publish', False)
+        # ── 투명물체(유리컵) 깊이 복원 ────────────────────────────────────
+        # see-through 로 깨진 투명 TARGET depth 를 복원. 2단계 구현:
+        # Stage 1: analytic 원통 (기존)
+        # Stage 2: SwinDRNet 학습 모델 (새로움, A100 ZMQ 서버)
+        # use_swindrnet=true 면 SwinDRNet 시도, 실패하면 analytic fallback.
+        p('transparent_reconstruct_enabled', False)
+        p('transparent_force',               False)
+        p('transparent_labels',              ['glass', 'cup', 'bottle', 'transparent', 'wine'])
+        # ──── Stage 2: SwinDRNet (학습 모델) ──────────────────────────────
+        p('swindrnet_enabled',               False)
+        p('swindrnet_host',                  '127.0.0.1')
+        p('swindrnet_port',                  5557)
+        p('swindrnet_timeout_ms',            30000)
+        # ──── Stage 1: Analytic 원통 (fallback) ──────────────────────────
+        p('transparent_cylinder_height',     -1.0)    # <0 → 데이터 추정, 아니면 고정(m)
+        p('transparent_radius_min',          0.015)
+        p('transparent_radius_max',          0.10)
 
     def _load_params(self) -> None:
         g = self.get_parameter
@@ -206,17 +226,42 @@ class GraspGenNode(Node):
         self._max_published = int(g('max_published_grasps').value)
         self._freeze_after_first = bool(g('freeze_after_first_publish').value)
         self._frozen = False
+        self._tr_enabled = bool(g('transparent_reconstruct_enabled').value)
+        self._tr_force   = bool(g('transparent_force').value)
+        self._tr_labels  = [str(s).lower() for s in g('transparent_labels').value]
+        self._swindrnet_enabled = bool(g('swindrnet_enabled').value)
+        self._tr_height  = float(g('transparent_cylinder_height').value)
+        self._tr_rmin    = float(g('transparent_radius_min').value)
+        self._tr_rmax    = float(g('transparent_radius_max').value)
 
     def _init_extrinsics(self) -> None:
         path = self.get_parameter('extrinsics_config').value or _DEFAULT_EXTRINSICS
         self._R_ee, self._t_ee = load_ee_extrinsics(path)
         self.get_logger().info(f'Extrinsics: {path}')
+        self.get_logger().info(f'  t_ee: {self._t_ee}')
+        self.get_logger().info(f'  R_ee[2,:] (world Z row): {self._R_ee[2, :]}')
 
     def _init_zmq(self) -> None:
         g = self.get_parameter
         host, port, timeout = g('zmq_host').value, g('zmq_port').value, g('zmq_timeout_ms').value
         self._client = GraspGenClient(host, port, timeout)
         self.get_logger().info(f'GraspGen ZMQ → tcp://{host}:{port}  timeout={timeout}ms')
+
+    def _init_swindrnet(self) -> None:
+        """Initialize SwinDRNet client (optional). Lazy connect on first use."""
+        self._swindrnet_client: Optional[SwinDRNetClient] = None
+        if not self._swindrnet_enabled:
+            return
+        g = self.get_parameter
+        host = g('swindrnet_host').value
+        port = g('swindrnet_port').value
+        timeout = g('swindrnet_timeout_ms').value
+        try:
+            self._swindrnet_client = SwinDRNetClient(host, port, timeout)
+            self.get_logger().info(f'SwinDRNet ZMQ → tcp://{host}:{port}  timeout={timeout}ms')
+        except Exception as e:
+            self.get_logger().error(f'SwinDRNet connection failed: {e} — will fall back to analytic')
+            self._swindrnet_client = None
 
     def _init_tf(self) -> None:
         self._tf_buffer   = tf2_ros.Buffer()
@@ -225,6 +270,7 @@ class GraspGenNode(Node):
     def _init_cache(self) -> None:
         self._ee_depth:       Optional[np.ndarray] = None
         self._ee_K:           Optional[np.ndarray] = None
+        self._ee_rgb:         Optional[np.ndarray] = None
         self._mask:           Optional[np.ndarray] = None
         self._labeled_dets:   Optional[list]       = None
         self._pending_result: Optional[str]        = None
@@ -265,6 +311,7 @@ class GraspGenNode(Node):
         g = self.get_parameter
         self.create_subscription(Image,      g('ee_depth_topic').value,           self._ee_depth_cb, 10)
         self.create_subscription(CameraInfo, g('ee_camera_info_topic').value,     self._ee_info_cb,  10)
+        self.create_subscription(Image,      g('ee_camera_rgb_topic').value,      self._ee_rgb_cb,   10)
         self.create_subscription(Image,      g('mask_topic').value,               self._mask_cb,     10)
         self.create_subscription(String,     g('labeled_detections_topic').value, self._dets_cb,     10)
         self.create_subscription(String,     g('world_map_result_topic').value,   self._result_cb,   10)
@@ -289,6 +336,22 @@ class GraspGenNode(Node):
         self._ee_K = extract_K(msg)
         self._try_flush()
 
+    def _ee_rgb_cb(self, msg: Image) -> None:
+        try:
+            h, w = msg.height, msg.width
+            data = np.frombuffer(msg.data, dtype=np.uint8)
+            if msg.encoding == 'rgb8':
+                self._ee_rgb = data.reshape((h, w, 3))
+            elif msg.encoding == 'bgr8':
+                self._ee_rgb = data.reshape((h, w, 3))
+            else:
+                self.get_logger().warn(f'RGB encoding not rgb8/bgr8: {msg.encoding}')
+                return
+        except ValueError as e:
+            self.get_logger().warn(f'RGB decode: {e}')
+            return
+        self._try_flush()
+
     def _mask_cb(self, msg: Image) -> None:
         self._mask = decode_mask(msg)
         self._try_flush()
@@ -311,6 +374,19 @@ class GraspGenNode(Node):
         self._pending_result = None
         self._result_cb(msg)
 
+    def _is_transparent_target(self) -> bool:
+        """TARGET 이 투명물체인지 판정. force=true 면 항상 True(테스트용),
+        아니면 TARGET detection 의 값 문자열에 transparent_labels 키워드 매칭."""
+        if self._tr_force:
+            return True
+        if not self._labeled_dets:
+            return False
+        for det in self._labeled_dets:
+            if str(det.get('category', '')).upper() == 'TARGET':
+                text = ' '.join(str(v) for v in det.values()).lower()
+                return any(k in text for k in self._tr_labels)
+        return False
+
     # ── main trigger ─────────────────────────────────────────────────────────
 
     def _result_cb(self, msg: String) -> None:
@@ -318,16 +394,65 @@ class GraspGenNode(Node):
         # latched /grasp_candidates 가 BT 에 영원히 노출되어 추가 추론은 불필요.
         if self._frozen:
             return
-        if self._ee_depth is None or self._ee_K is None or self._mask is None:
+        if self._ee_depth is None or self._ee_K is None or self._mask is None or self._ee_rgb is None:
             self._pending_result = msg.data
             self.get_logger().warn('EE 캐시 미도착 — 대기')
             return
 
+        # [디버그] 원본 EE depth 범위 확인
+        self.get_logger().info(
+            f'[디버그] 원본 ee_depth: shape={self._ee_depth.shape} '
+            f'dtype={self._ee_depth.dtype} '
+            f'min={self._ee_depth.min():.6f} max={self._ee_depth.max():.6f} '
+            f'mean={self._ee_depth.mean():.6f}')
+
+        # inf = 창밖 하늘 등 센서 레인지 밖. 유리컵과 무관하다 (유리컵 영역은
+        # see-through 로 뒤 테이블 depth 가 찍힌다 — 그게 SwinDRNet 이 고칠 입력).
+        # 표준 RGB-D 규약대로 0 = invalid 로 표기해서 모델에 넘긴다.
+        ee_depth_clean = self._ee_depth.copy()
+        inf_mask = ~np.isfinite(ee_depth_clean)
+        if inf_mask.any():
+            ee_depth_clean[inf_mask] = 0.0
+            self.get_logger().info(
+                f'inf/NaN {inf_mask.sum()} px (센서 레인지 밖) → 0 = invalid')
+        self._ee_depth = ee_depth_clean
+
         try:
             result      = json.loads(msg.data)
-            target_info = result.get('target', {})
+            # Projection JSON 구조: {"target": {...}, "glass cup": {...}, "obstacle": {...}, ...}
+            # 투명물체는 "glass cup", "cup" 등의 라벨로 들어올 수 있음
+            target_info = None
+            target_label = None
+
+            # 1. "target" 라벨 먼저 시도
+            if 'target' in result:
+                target_info = result['target']
+                target_label = 'target'
+
+            # 2. transparent_labels 중 매칭되는 라벨 찾기
+            if target_info is None:
+                for label in self._tr_labels:
+                    if label in result:
+                        target_info = result[label]
+                        target_label = label
+                        break
+
+            # 3. 일반적인 라벨들 시도
+            if target_info is None:
+                for label in ['glass cup', 'cup', 'mug', 'bottle']:
+                    if label in result:
+                        target_info = result[label]
+                        target_label = label
+                        break
+
+            if target_info is None:
+                available = list(result.keys())
+                self.get_logger().info(f'TARGET 라벨 없음. 사용 가능한 키: {available}')
+                return
+
             centroid    = np.array(target_info['centroid'], dtype=np.float32)
             point_count = int(target_info.get('point_count', 0))
+            self.get_logger().debug(f'TARGET 찾음: {target_label}, points={point_count}')
         except (KeyError, json.JSONDecodeError, ValueError) as e:
             self.get_logger().warn(f'world_map_result parse: {e}')
             return
@@ -337,22 +462,106 @@ class GraspGenNode(Node):
             return
 
         t0         = time.monotonic()
+        t_extract  = time.monotonic()
         target_val = find_target_mask_val(self._labeled_dets)
-        pts_world  = extract_target_cloud(
-            self._ee_depth, self._ee_K, self._mask, target_val,
-            self._R_ee, self._t_ee,
-            self._min_depth, self._max_depth, self._max_pts,
-        )
+
+        # [진단] Glass mask 영역의 깊이값 확인
+        glass_mask = (self._mask == target_val)
+        glass_region = self._ee_depth[glass_mask]
+
+        if glass_region.size > 0:
+            self.get_logger().info(
+                f'[진단] Glass mask 영역 깊이: '
+                f'size={glass_region.size}, '
+                f'min={np.nanmin(glass_region):.6f}, '
+                f'max={np.nanmax(glass_region):.6f}, '
+                f'mean={np.nanmean(glass_region):.6f}, '
+                f'inf_count={np.isinf(glass_region).sum()}, '
+                f'nan_count={np.isnan(glass_region).sum()}, '
+                f'zero_count={(glass_region == 0.0).sum()}, '
+                f'valid_count={np.isfinite(glass_region).sum()}')
+
+        # 투명 TARGET → SwinDRNet 으로 depth 복원.
+        # 기하학적 prior(inpaint/원통/경계보간) 는 쓰지 않는다. 모델이 복원하지
+        # 못하면 복원 실패로 보고하고 raw depth 로 진행한다 — 실패를 감추지 말 것.
+        pts_world = None
+        if self._tr_enabled and self._is_transparent_target():
+            self.get_logger().info('[투명복원] 투명 TARGET 감지')
+
+            if self._swindrnet_enabled and self._swindrnet_client:
+                try:
+                    import cv2
+                    t_swin = time.monotonic()
+
+                    # SwinDRNet 입력: EE RGB (RGB 순서 — DREDS 는 PIL 로드) +
+                    # broken depth (미터, 0=invalid, 정규화 금지) + intrinsics.
+                    rgb_uint8 = self._ee_rgb.astype(np.uint8)
+
+                    restored_depth = self._swindrnet_client.restore(
+                        rgb_uint8, self._ee_depth, self._ee_K)
+                    dt_swin = time.monotonic() - t_swin
+
+                    # 복원 품질 평가: TARGET 마스크 안에서 모델이 raw 대비
+                    # 얼마나 depth 를 당겼는가 (유리 표면은 테이블보다 카메라에
+                    # 가까우므로 raw 보다 작아야 정상).
+                    m_t       = (self._mask == target_val)
+                    raw_med   = float(np.median(self._ee_depth[m_t])) if m_t.any() else float('nan')
+                    rest_med  = float(np.median(restored_depth[m_t])) if m_t.any() else float('nan')
+                    delta_mm  = (raw_med - rest_med) * 1000.0
+                    self.get_logger().info(
+                        f'[투명복원] SwinDRNet {dt_swin*1000:.0f}ms | '
+                        f'TARGET median raw={raw_med:.4f}m → restored={rest_med:.4f}m '
+                        f'(Δ={delta_mm:+.1f}mm, 양수여야 유리 표면 복원)')
+
+                    self._save_swindrnet_debug(self._ee_depth, restored_depth, rgb_uint8)
+
+                    pts_world = extract_target_cloud(
+                        restored_depth, self._ee_K, self._mask, target_val,
+                        self._R_ee, self._t_ee,
+                        self._min_depth, self._max_depth, self._max_pts,
+                    )
+                    n_pts = len(pts_world) if pts_world is not None else 0
+                    if n_pts == 0:
+                        self.get_logger().warn('[투명복원] SwinDRNet 복원 후 TARGET 포인트 0')
+                        pts_world = None
+                except Exception as e:
+                    self.get_logger().error(f'[투명복원] SwinDRNet 실패: {e}')
+                    pts_world = None
+
+            if pts_world is None:
+                self.get_logger().warn(
+                    '[투명복원] 복원 실패 — raw depth 로 진행 (유리컵은 테이블이 '
+                    'see-through 로 비친 평면으로 나옴. 이건 복원이 아니다)')
+
+        if pts_world is None:
+            pts_world = extract_target_cloud(
+                self._ee_depth, self._ee_K, self._mask, target_val,
+                self._R_ee, self._t_ee,
+                self._min_depth, self._max_depth, self._max_pts,
+            )
+        dt_extract = time.monotonic() - t_extract
 
         if pts_world is None or len(pts_world) < self._min_pts:
             n = len(pts_world) if pts_world is not None else 0
             self.get_logger().info(f'TARGET 포인트 부족 ({n}) — skip')
             return
 
-        self.get_logger().info(f'TARGET {len(pts_world)} pts → GraspGen')
+        # Point cloud 타입 및 형태 확인
+        pts_world = np.asarray(pts_world, dtype=np.float32)
+        self.get_logger().info(f'TARGET {len(pts_world)} pts → GraspGen (shape={pts_world.shape}, dtype={pts_world.dtype})')
+
+        # [디버그] pts_world 좌표 범위 확인
+        self.get_logger().info(
+            f'[디버그] pts_world 좌표범위: '
+            f'X [{pts_world[:, 0].min():.6f}, {pts_world[:, 0].max():.6f}] '
+            f'Y [{pts_world[:, 1].min():.6f}, {pts_world[:, 1].max():.6f}] '
+            f'Z [{pts_world[:, 2].min():.6f}, {pts_world[:, 2].max():.6f}] '
+            f'Z_mean={pts_world[:, 2].mean():.6f}')
+
         stamp = self.get_clock().now().to_msg()
         self._cloud_pub.publish(build_target_cloud_msg(pts_world, self._world_frame, stamp))
 
+        t_pca = time.monotonic()
         # PCA 로 TARGET 의 수평(XY) 주축 계산 — force_top_down / yaw 정렬에 사용.
         # 짧은 축 = 객체의 가장 얇은 수평 방향 = finger 가 span 해야 할 방향.
         # world AABB 와 달리 객체가 yaw 회전돼 있어도 정확. (static TF 가
@@ -372,9 +581,16 @@ class GraspGenNode(Node):
                 f'분산비={ratio:.2f}')
         except (ValueError, np.linalg.LinAlgError) as e:
             self.get_logger().warn(f'PCA short-axis 계산 실패: {e}')
+        dt_pca = time.monotonic() - t_pca
 
         try:
+            t_zmq = time.monotonic()
             grasps, confs = self._client.request(pts_world, self._num_grasps, self._topk)
+            dt_zmq = time.monotonic() - t_zmq
+            self.get_logger().info(
+                f'[PROFILE][graspgen][zmq] round_trip={dt_zmq:.3f}s '
+                f'input_points={len(pts_world)} num_grasps={self._num_grasps} topk={self._topk}'
+            )
         except (RuntimeError, ValueError) as e:
             self.get_logger().error(f'GraspGen: {e}')
             return
@@ -383,6 +599,7 @@ class GraspGenNode(Node):
             self.get_logger().warn('GraspGen: 결과 없음')
             return
 
+        t_workspace = time.monotonic()
         # Workspace floor filter — drop grasps that pierce the table.
         # The GraspGen server is trained object-centric and does not know
         # where the supporting surface is; without this filter top-down
@@ -403,10 +620,13 @@ class GraspGenNode(Node):
             except (KeyError, IndexError, TypeError, ValueError) as e:
                 self.get_logger().warn(f'workspace filter skipped: {e}')
 
+        dt_workspace = time.monotonic() - t_workspace
+
         if len(grasps) == 0:
             self.get_logger().warn('GraspGen: 필터 후 후보 없음')
             return
 
+        t_quality = time.monotonic()
         # Confidence threshold (paper §6.10 recommends ≥ 0.5).
         if self._min_quality > 0.0:
             keep   = confs >= self._min_quality
@@ -418,19 +638,24 @@ class GraspGenNode(Node):
             grasps = grasps[keep]
             confs  = confs[keep]
 
+        dt_quality = time.monotonic() - t_quality
+
         if len(grasps) == 0:
             self.get_logger().warn(
                 f'GraspGen: min_quality≥{self._min_quality:.2f} 통과 후보 없음 '
                 f'(num_grasps batch={self._num_grasps} 증가 또는 threshold↓ 검토)')
             return
 
+        t_build = time.monotonic()
         order  = np.argsort(confs)[::-1]
         grasps = grasps[order[:self._topk]]
         confs  = confs[order[:self._topk]]
 
         tf_stamped, output_frame = self._lookup_tf()
         candidates = self._build_candidates(grasps, confs, tf_stamped, output_frame)
+        dt_build = time.monotonic() - t_build
 
+        t_pose_adjust = time.monotonic()
         # Optional X-Y override → align with TARGET bbox horizontal center.
         if self._override_xy and candidates:
             try:
@@ -523,16 +748,23 @@ class GraspGenNode(Node):
             except (KeyError, IndexError, TypeError, ValueError) as e:
                 self.get_logger().warn(f'Yaw align skipped: {e}')
 
+        dt_pose_adjust = time.monotonic() - t_pose_adjust
+
         # ── Client-side filters (Option A — shrink the goal set for the
         #    sequential motion planner). Order: cheap → expensive.
         n_after_build = len(candidates)
+        dt_top_down = 0.0
+        dt_ik = 0.0
 
         if self._td_enabled:
+            t_top_down = time.monotonic()
+            candidates_before = len(candidates)
             candidates = top_down_filter(
                 candidates, self._td_angle_deg, logger=self.get_logger())
+            dt_top_down = time.monotonic() - t_top_down
             self.get_logger().info(
                 f'top_down(≤{self._td_angle_deg:.0f}°): '
-                f'{n_after_build} → {len(candidates)}')
+                f'{candidates_before} → {len(candidates)}')
             if not candidates:
                 self.get_logger().warn(
                     'top_down filter dropped all candidates — disable filter '
@@ -544,6 +776,7 @@ class GraspGenNode(Node):
             t_ik = time.monotonic()
             candidates, ik_stats = self._ik_checker.filter(candidates)
             ik_dt = time.monotonic() - t_ik
+            dt_ik = ik_dt
             if ik_stats['service_down']:
                 self.get_logger().warn(
                     f'IK service unavailable — pass-through ({n_before_ik} kept)')
@@ -557,10 +790,13 @@ class GraspGenNode(Node):
                     'top-down approach for this target')
                 return
 
+        t_final_cap = time.monotonic()
         # Final confidence cap. Already confidence-sorted upstream, but
         # filters may have removed leading entries — resort then truncate.
         candidates = confidence_top_n(candidates, self._max_published)
+        dt_final_cap = time.monotonic() - t_final_cap
 
+        t_publish = time.monotonic()
         out      = String()
         out.data = json.dumps({
             'candidates':      candidates,
@@ -577,11 +813,21 @@ class GraspGenNode(Node):
             tcp_offset=0.103)
         self._marker_pub.publish(clear_ma)
         self._marker_pub.publish(markers_ma)
+        dt_publish = time.monotonic() - t_publish
 
         best_q = candidates[0]['quality'] if candidates else 0.0
+        total_dt = time.monotonic() - t0
+        self.get_logger().info(
+            f'[PROFILE][graspgen] total={total_dt:.3f}s extract_cloud={dt_extract:.3f}s '
+            f'pca={dt_pca:.3f}s zmq={dt_zmq:.3f}s workspace={dt_workspace:.3f}s '
+            f'quality={dt_quality:.3f}s build_candidates={dt_build:.3f}s '
+            f'pose_adjust={dt_pose_adjust:.3f}s top_down={dt_top_down:.3f}s '
+            f'ik={dt_ik:.3f}s final_cap={dt_final_cap:.3f}s publish={dt_publish:.3f}s '
+            f'published={len(candidates)} best={best_q:.3f}'
+        )
         self.get_logger().info(
             f'Published {len(candidates)} grasp(s)  '
-            f'best={best_q:.3f}  elapsed={time.monotonic()-t0:.2f}s')
+            f'best={best_q:.3f}  elapsed={total_dt:.2f}s')
 
         # 첫 성공 publish 후 freeze — 이후 world_map_result 입력 무시.
         if self._freeze_after_first and not self._frozen and candidates:
@@ -589,6 +835,24 @@ class GraspGenNode(Node):
             self.get_logger().info('FROZEN — 이후 /world_map_result 입력 무시. latched /grasp_candidates 그대로.')
 
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _save_swindrnet_debug(self, raw: np.ndarray, restored: np.ndarray,
+                              rgb: np.ndarray) -> None:
+        """Dump raw/restored depth + RGB to /tmp for visual inspection."""
+        import cv2
+
+        def _colorize(d):
+            v = np.nan_to_num(d, nan=0.0, posinf=0.0, neginf=0.0)
+            v = (v / (v.max() + 1e-6) * 255).astype(np.uint8)
+            return cv2.applyColorMap(v, cv2.COLORMAP_TURBO)
+
+        try:
+            cv2.imwrite('/tmp/swindrnet_00_raw_depth.png', _colorize(raw))
+            cv2.imwrite('/tmp/swindrnet_01_restored_depth.png', _colorize(restored))
+            cv2.imwrite('/tmp/swindrnet_02_mask.png', (self._mask * 255).astype(np.uint8))
+            cv2.imwrite('/tmp/swindrnet_03_rgb.png', cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+        except Exception as e:
+            self.get_logger().warn(f'디버그 이미지 저장 실패: {e}')
 
     def _lookup_tf(self) -> tuple:
         """Return (tf_stamped | None, output_frame_id)."""

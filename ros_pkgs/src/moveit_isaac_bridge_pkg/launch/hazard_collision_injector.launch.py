@@ -45,13 +45,8 @@ _STOP_RESUME_PARAMS = {
     # box leaves the scene the moment YOLO loses detection.
     "stable_position_threshold": 0.01,
     # Hold the collision_object in the planning scene for this long after
-    # the last YOLO detection. Empirically the ForwardTrajectory abort
-    # threshold is ~1 stuck iter at 2 Hz (~500 ms total budget), so the
-    # collision_object lifetime (= transit + clear_timeout) must stay
-    # under that. With box transit ~200 ms at -2.5 m/s, 0.15 s puts total
-    # in-scene time ≈ 350 ms — leaves ~150 ms abort margin while still
-    # giving the halt a visible duration.
-    "clear_timeout_sec": 0.15,
+    # the last YOLO detection. Balanced at 0.3 s for visible halt + stable hold.
+    "clear_timeout_sec": 0.3,
 }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -33,6 +34,19 @@ from .projection_engine import (
     project_labeled,
     project_unknown,
 )
+
+def _stamp_age_sec(node: Node, msg: Image) -> Optional[float]:
+    stamp = msg.header.stamp
+    stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+    if stamp_ns <= 0:
+        return None
+    age = (node.get_clock().now().nanoseconds - stamp_ns) * 1e-9
+    # Isaac/sim headers and ROS/system clock can use different epochs. In that
+    # case the computed age becomes huge and is less useful than omitting it.
+    if age < 0.0 or age > 3600.0:
+        return None
+    return age
+
 
 def _find_project_root() -> Path:
     current = Path(__file__).resolve()
@@ -172,6 +186,7 @@ class MultiViewProjectorNode(Node):
     # ── trigger callback ──────────────────────────────────────────────────────
 
     def _mask_cb(self, mask_msg: Image) -> None:
+        t_total = time.monotonic()
         # Freeze mode: 한 번 publish 한 뒤로 신규 mask 전부 drop. latched QoS 가
         # 마지막 발행을 BT 에 영원히 노출하므로 추가 갱신은 오히려 해로움.
         if self._frozen:
@@ -187,14 +202,18 @@ class MultiViewProjectorNode(Node):
         all_category_points: List[CategoryPoints] = []
 
         # ── EE camera view ────────────────────────────────────────────────────
+        t_ee = time.monotonic()
         ee_pts = self._project_labeled(
             self._ee_depth, self._ee_info, mask_msg,
             self._latest_detections, self._R_EE, self._t_EE,
         )
+        dt_ee = time.monotonic() - t_ee
 
         # ── Top camera view — Pass 1: remove UNKNOWN near EE seg (XY + Z gate) ──
         top_pts: Optional[CategoryPoints] = None
+        dt_top = 0.0
         if self._top_depth is not None and self._top_info is not None:
+            t_top = time.monotonic()
             ee_seg_pts = collect_seg_points(ee_pts)
             top_pts = self._project_unknown(
                 self._top_depth, self._top_info,
@@ -203,6 +222,7 @@ class MultiViewProjectorNode(Node):
                 ee_seg_filter_radius=self._ee_seg_filter_radius,
                 ee_seg_z_margin=self._ee_seg_z_margin,
             )
+            dt_top = time.monotonic() - t_top
         else:
             self.get_logger().warn(
                 'Top camera not available — publishing EE view only. '
@@ -210,12 +230,14 @@ class MultiViewProjectorNode(Node):
             )
 
         # ── Pass 2: UNKNOWN > FREE — remove EE FREE near top UNKNOWN ─────────
+        t_filter = time.monotonic()
         if top_pts is not None:
             ee_pts = filter_free_by_unknown(
                 ee_pts, top_pts,
                 self._free_unknown_xy_radius,
                 self._free_unknown_z_margin,
             )
+        dt_filter = time.monotonic() - t_filter
 
         if ee_pts:
             all_category_points.extend(ee_pts)
@@ -236,9 +258,11 @@ class MultiViewProjectorNode(Node):
         header.frame_id = 'world'
 
         # ── publish ───────────────────────────────────────────────────────────
+        t_build_publish = time.monotonic()
         self._pub_cloud.publish(build_pointcloud2(header, all_category_points))
         self._pub_result.publish(String(data=build_result_json(all_category_points)))
         self._pub_raw_cloud.publish(self._build_raw_cloud(header, all_category_points))
+        dt_build_publish = time.monotonic() - t_build_publish
 
         # 첫 발행 후 freeze — 이후 mask 입력은 모두 무시.
         if self._freeze_after_first and not self._frozen:
@@ -246,11 +270,27 @@ class MultiViewProjectorNode(Node):
             self.get_logger().info('FROZEN — 이후 mask 입력 무시. latched /world_map_result 그대로 유지.')
 
         # ── save PLY to disk ──────────────────────────────────────────────────
+        t_save = time.monotonic()
         stamp  = self._ee_depth.header.stamp.sec
         prefix = f"{self._initials}_" if self._initials else ""
         save_ply_labeled(
             _OUTPUT_DIR / f"world_map_{prefix}{stamp}.ply",
             all_category_points,
+        )
+        dt_save = time.monotonic() - t_save
+        mask_age = _stamp_age_sec(self, mask_msg)
+        ee_depth_age = _stamp_age_sec(self, self._ee_depth) if self._ee_depth is not None else None
+        top_depth_age = _stamp_age_sec(self, self._top_depth) if self._top_depth is not None else None
+        mask_age_text = f"{mask_age:.3f}s" if mask_age is not None else "n/a"
+        ee_age_text = f"{ee_depth_age:.3f}s" if ee_depth_age is not None else "n/a"
+        top_age_text = f"{top_depth_age:.3f}s" if top_depth_age is not None else "n/a"
+        self.get_logger().info(
+            f"[PROFILE][projector] total={time.monotonic() - t_total:.3f}s "
+            f"ee_project={dt_ee:.3f}s top_project={dt_top:.3f}s "
+            f"free_unknown_filter={dt_filter:.3f}s "
+            f"build_publish={dt_build_publish:.3f}s save_ply={dt_save:.3f}s "
+            f"categories={len(all_category_points)} "
+            f"mask_age={mask_age_text} ee_depth_age={ee_age_text} top_depth_age={top_age_text}"
         )
 
     # ── raw cloud (geometry-only for MoveIt2 OctoMap) ────────────────────────

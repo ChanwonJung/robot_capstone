@@ -22,6 +22,19 @@ from .postprocess import format_detections, format_masks, build_label_map
 from .prompt_adapter import PromptAdapter
 from .visualizer import draw_bboxes, draw_masks, save_result
 
+def _stamp_age_sec(node: Node, msg: Image) -> Optional[float]:
+    stamp = msg.header.stamp
+    stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+    if stamp_ns <= 0:
+        return None
+    age = (node.get_clock().now().nanoseconds - stamp_ns) * 1e-9
+    # Isaac/sim headers and ROS/system clock can use different epochs. In that
+    # case the computed age becomes huge and is less useful than omitting it.
+    if age < 0.0 or age > 3600.0:
+        return None
+    return age
+
+
 def _find_project_root() -> Path:
     current = Path(__file__).resolve()
     for parent in current.parents:
@@ -184,6 +197,7 @@ class GroundedSAMNode(Node):
         self._top_latest_depth = msg
 
     def _ee_image_callback(self, msg: Image) -> None:
+        cycle_t0 = time.monotonic()
         self._frame_counter += 1
         if self._frame_counter % self._process_every_n_frames != 0:
             return
@@ -193,22 +207,29 @@ class GroundedSAMNode(Node):
         self._last_process_time = now
 
         # EE view always runs (this is the trigger)
-        self._process_view(
+        ee_dt = self._process_view(
             msg, self.prompt_raw, "ee",
             self.pub_annotated, self.pub_mask, self.pub_json,
         )
 
+        top_dt = None
         # Top view runs only if dual-view enabled and a Top image has arrived
         if self._dual_view and self._top_latest is not None:
             top_image_override = None
             if self._top_depth_enabled and self._top_latest_depth is not None:
                 top_bgr = self.bridge.imgmsg_to_cv2(self._top_latest, desired_encoding="bgr8")
                 top_image_override = self._apply_top_depth_mask(top_bgr, self._top_latest_depth)
-            self._process_view(
+            top_dt = self._process_view(
                 self._top_latest, self._top_prompt_raw, "top",
                 self.pub_top_annotated, self.pub_top_mask, self.pub_top_json,
                 image_bgr_override=top_image_override,
             )
+
+        self.get_logger().info(
+            f"[PROFILE][gsam_cycle] total={time.monotonic() - cycle_t0:.3f}s "
+            f"ee={ee_dt:.3f}s "
+            + (f"top={top_dt:.3f}s" if top_dt is not None else "top=skipped")
+        )
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -249,14 +270,20 @@ class GroundedSAMNode(Node):
         pub_mask,
         pub_json,
         image_bgr_override: Optional[np.ndarray] = None,
-    ) -> None:
+    ) -> float:
+        t_total = time.monotonic()
+        age = _stamp_age_sec(self, img_msg)
+        t_decode = time.monotonic()
         if image_bgr_override is not None:
             image_bgr = image_bgr_override
         else:
             image_bgr = self.bridge.imgmsg_to_cv2(img_msg, desired_encoding="bgr8")
+        dt_decode = time.monotonic() - t_decode
         prompt = self.adapter.adapt(prompt_raw)
 
+        t_pipeline = time.monotonic()
         result = self.pipeline.run(image=image_bgr, prompt=prompt)
+        dt_pipeline = time.monotonic() - t_pipeline
         runtime_devices = result.get("runtime_devices")
         if runtime_devices is not None:
             self.get_logger().info(
@@ -265,6 +292,7 @@ class GroundedSAMNode(Node):
                 f"sam_predictor_device={runtime_devices['sam_predictor_device']}"
             )
 
+        t_post = time.monotonic()
         det_list = format_detections(result["detections"], result["phrases"])
 
         # Drop detections whose bbox covers more than max_bbox_area_ratio of
@@ -322,7 +350,9 @@ class GroundedSAMNode(Node):
         else:
             mask_list = []
             label_map = np.zeros(image_bgr.shape[:2], dtype=np.uint8)
+        dt_post = time.monotonic() - t_post
 
+        t_publish = time.monotonic()
         annotated_msg = self.bridge.cv2_to_imgmsg(vis, encoding="bgr8")
         annotated_msg.header = img_msg.header
         pub_annotated.publish(annotated_msg)
@@ -334,12 +364,27 @@ class GroundedSAMNode(Node):
         msg_json = String()
         msg_json.data = json.dumps(det_list)
         pub_json.publish(msg_json)
+        dt_publish = time.monotonic() - t_publish
 
         # 파일 저장: result_{view}_{initials}.jpg
         initials = "".join(p.strip()[0] for p in prompt_raw.split(",") if p.strip())
         filename = f"result_{view_name}_{initials}.jpg" if initials else f"result_{view_name}.jpg"
+        t_save = time.monotonic()
         save_result(vis, self._output_dir / filename)
+        dt_save = time.monotonic() - t_save
+        total = time.monotonic() - t_total
+        prof = result.get("profile", {})
+        age_text = f"{age:.3f}s" if age is not None else "n/a"
+        self.get_logger().info(
+            f"[PROFILE][gsam][{view_name}] total={total:.3f}s "
+            f"decode={dt_decode:.3f}s pipeline={dt_pipeline:.3f}s "
+            f"gdino={prof.get('gdino_sec', 0.0):.3f}s "
+            f"sam={prof.get('sam_sec', 0.0):.3f}s "
+            f"post={dt_post:.3f}s publish={dt_publish:.3f}s save={dt_save:.3f}s "
+            f"detections={len(det_list)} input_age={age_text}"
+        )
         self.get_logger().info(f"[{view_name}] Saved → {self._output_dir / filename}")
+        return total
 
 
 def main(args=None):

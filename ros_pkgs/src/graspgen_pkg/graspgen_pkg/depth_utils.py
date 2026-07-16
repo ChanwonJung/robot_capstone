@@ -67,7 +67,7 @@ def depth_to_points(
     Z_v, u_v, v_v = Z[valid], uu[valid], vv[valid]
     pts = np.stack([(u_v - cx) * Z_v / fx,
                     (v_v - cy) * Z_v / fy,
-                    Z_v], axis=1)
+                    Z_v], axis=1)  # OpenCV 카메라 좌표계: +Z forward
     pix = np.stack([v_v.astype(np.int32), u_v.astype(np.int32)], axis=1)
     return pts, pix
 
