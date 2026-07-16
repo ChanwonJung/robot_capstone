@@ -29,6 +29,13 @@ def generate_launch_description() -> LaunchDescription:
 
     pkg = get_package_share_directory('graspgen_pkg')
 
+    # 기본 extrinsics 경로 — ROBOT_CAPSTONE_ROOT(launch_env.bash 설정) 기반.
+    # graspgen_node 의 _DEFAULT_EXTRINSICS 는 옛 gsam_ws 경로라 신뢰 불가.
+    _default_ext = os.path.join(
+        os.environ.get('ROBOT_CAPSTONE_ROOT', ''),
+        'ros_pkgs/src/mask_projection_pkg/config/camera_extrinsics.yaml',
+    )
+
     args = [
         DeclareLaunchArgument(
             'zmq_host',
@@ -88,8 +95,8 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             'extrinsics_config',
-            default_value='',
-            description='Path to camera_extrinsics.yaml (empty = auto)',
+            default_value=_default_ext,
+            description='Path to camera_extrinsics.yaml (기본: ROBOT_CAPSTONE_ROOT 기반)',
         ),
         DeclareLaunchArgument(
             'world_frame',
@@ -100,6 +107,57 @@ def generate_launch_description() -> LaunchDescription:
             'robot_frame',
             default_value='panda_link0',
             description='Robot base frame for output poses',
+        ),
+        DeclareLaunchArgument(
+            'ee_depth_topic',
+            default_value='/ee_rgbd_camera/depth_image',
+            description='Isaac EE depth 토픽 (실제: /ee_rgbd_camera/*)',
+        ),
+        DeclareLaunchArgument(
+            'ee_camera_info_topic',
+            default_value='/ee_rgbd_camera/camera_info',
+            description='Isaac EE camera_info 토픽',
+        ),
+        DeclareLaunchArgument(
+            'mask_topic',
+            default_value='/qwen/mask_image',
+            description='GSAM/qwen 마스크 토픽 (TARGET 마스크)',
+        ),
+        DeclareLaunchArgument(
+            'transparent_reconstruct_enabled',
+            default_value='false',
+            description='투명물체(유리컵) see-through depth 를 원통 복원',
+        ),
+        DeclareLaunchArgument(
+            'transparent_force',
+            default_value='false',
+            description='라벨 무시하고 항상 투명 복원 (테스트용)',
+        ),
+        DeclareLaunchArgument(
+            'transparent_cylinder_height',
+            default_value='0.10',   # 유리 위쪽 depth 신호 없어 추정 불가 → 고정값(m)
+            description='컵 높이(m). <0 이면 데이터에서 추정',
+        ),
+        # ── SwinDRNet (Stage 2) ─────────────────────────────────────────
+        DeclareLaunchArgument(
+            'swindrnet_enabled',
+            default_value='false',
+            description='Enable SwinDRNet depth restoration (A100 server required)',
+        ),
+        DeclareLaunchArgument(
+            'swindrnet_host',
+            default_value='127.0.0.1',
+            description='SwinDRNet server host (SSH tunnel endpoint)',
+        ),
+        DeclareLaunchArgument(
+            'swindrnet_port',
+            default_value='5557',
+            description='SwinDRNet server port (SSH tunnel local port)',
+        ),
+        DeclareLaunchArgument(
+            'swindrnet_timeout_ms',
+            default_value='30000',
+            description='SwinDRNet ZMQ timeout (ms)',
         ),
     ]
 
@@ -125,6 +183,16 @@ def generate_launch_description() -> LaunchDescription:
                 'extrinsics_config':LaunchConfiguration('extrinsics_config'),
                 'world_frame':      LaunchConfiguration('world_frame'),
                 'robot_frame':      LaunchConfiguration('robot_frame'),
+                'ee_depth_topic':        LaunchConfiguration('ee_depth_topic'),
+                'ee_camera_info_topic':  LaunchConfiguration('ee_camera_info_topic'),
+                'mask_topic':            LaunchConfiguration('mask_topic'),
+                'transparent_reconstruct_enabled': LaunchConfiguration('transparent_reconstruct_enabled'),
+                'transparent_force':               LaunchConfiguration('transparent_force'),
+                'transparent_cylinder_height':     LaunchConfiguration('transparent_cylinder_height'),
+                'swindrnet_enabled':     LaunchConfiguration('swindrnet_enabled'),
+                'swindrnet_host':        LaunchConfiguration('swindrnet_host'),
+                'swindrnet_port':        LaunchConfiguration('swindrnet_port'),
+                'swindrnet_timeout_ms':  LaunchConfiguration('swindrnet_timeout_ms'),
             },
         ],
     )

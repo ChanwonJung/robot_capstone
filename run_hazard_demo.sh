@@ -55,13 +55,10 @@ case "${MODE}" in
         # HAZARD_OBJECT.
         : "${ROBOT_CAPSTONE_HAZARD_OBJECT:=box}"
         : "${ROBOT_CAPSTONE_HAZARD_MODE:=flythrough}"
-        # Fast -X crossing — short physical contact with the arm body keeps
-        # the Isaac collision impulse tiny, and the planning-scene
-        # collision_object lifetime (~box transit + clear_timeout_sec)
-        # stays inside the local planner's ~500 ms abort budget. At
-        # -2.2 m/s a 0.5 m workspace takes ~230 ms; YOLO at 30 Hz still
-        # gets 7 detection frames, plenty for the injector to register.
-        : "${ROBOT_CAPSTONE_BOX_VX:=-2.2}"
+        # Slower -1.3 m/s for stable stop+resume visualization.
+        # At -1.3 m/s a 0.5 m workspace takes ~385 ms; YOLO at 30 Hz still
+        # gets 11+ detection frames, plenty for the injector to register.
+        : "${ROBOT_CAPSTONE_BOX_VX:=-1.3}"
         : "${ROBOT_CAPSTONE_BOX_VY:=0.0}"
         # PARK_X is unused in flythrough but exporting a value keeps the env
         # snapshot tidy and lets users flip to park mid-session without

@@ -36,30 +36,42 @@ export ROBOT_CAPSTONE_ROOT="${WS}"
 echo "[launch_env] ROS2 Jazzy + venv PYTHONPATH set"
 echo "  venv : ${VENV_SITE}"
 
-# ── SSH tunnel: aurora-g6 vLLM → localhost:8000 ───────────────────────────────
-# Only needed when calling the REAL Qwen VLM on Seraph. The stub path
-# (qwen_stub_node) and the C++/perception terminals do not use it. Skip with:
-#   source launch_env.bash --no-tunnel
-#   SKIP_QWEN_TUNNEL=1 source launch_env.bash
-_SKIP_TUNNEL="${SKIP_QWEN_TUNNEL:-0}"
+# ── SSH tunnels ───────────────────────────────────────────────────────────────
+# 1. Qwen vLLM (aurora-g6) → localhost:8000
+# 2. GraspGen ZMQ (A100) → localhost:5556
+# 3. SwinDRNet ZMQ (A100) → localhost:5557
+
+_SKIP_TUNNEL="${SKIP_A100_TUNNEL:-0}"
 for _arg in "$@"; do
     [ "${_arg}" = "--no-tunnel" ] && _SKIP_TUNNEL=1
 done
 
 if [ "${_SKIP_TUNNEL}" = "1" ]; then
-    echo "[launch_env] Qwen SSH tunnel skipped (--no-tunnel / SKIP_QWEN_TUNNEL=1)"
+    echo "[launch_env] A100 SSH tunnels skipped (--no-tunnel / SKIP_A100_TUNNEL=1)"
 else
-    _TUNNEL_USER="jaewonheo1101"
-    _JUMP_HOST="aurora.khu.ac.kr"
-    _TARGET_HOST="aurora-g6"
-    _LOCAL_PORT=8000
-
-    if lsof -ti tcp:${_LOCAL_PORT} &>/dev/null; then
-        echo "[launch_env] Seraph ssh tunnel to localhost already established"
+    # Qwen vLLM tunnel (port 8000)
+    if lsof -ti tcp:8000 &>/dev/null; then
+        echo "[launch_env] ✓ Qwen vLLM tunnel already open"
     else
-        ssh -fN -L ${_LOCAL_PORT}:${_TARGET_HOST}:${_LOCAL_PORT} \
-            -J ${_TUNNEL_USER}@${_JUMP_HOST}:30080 \
-            ${_TUNNEL_USER}@${_TARGET_HOST}
-        echo "[launch_env] Seraph ssh tunnel to localhost established"
+        ssh -fN -L 8000:aurora-g6:8000 \
+            -J jaewonheo1101@aurora.khu.ac.kr:30080 \
+            jaewonheo1101@aurora-g6
+        echo "[launch_env] ✓ Qwen vLLM tunnel → localhost:8000"
+    fi
+
+    # A100 GraspGen server tunnel (port 5556)
+    if lsof -ti tcp:5556 &>/dev/null; then
+        echo "[launch_env] ✓ GraspGen server tunnel already open"
+    else
+        ssh -fN -L 5556:127.0.0.1:5556 tta@123.37.28.208
+        echo "[launch_env] ✓ GraspGen server tunnel → localhost:5556"
+    fi
+
+    # A100 SwinDRNet server tunnel (port 5557)
+    if lsof -ti tcp:5557 &>/dev/null; then
+        echo "[launch_env] ✓ SwinDRNet server tunnel already open"
+    else
+        ssh -fN -L 5557:127.0.0.1:5557 tta@123.37.28.208
+        echo "[launch_env] ✓ SwinDRNet server tunnel → localhost:5557"
     fi
 fi
