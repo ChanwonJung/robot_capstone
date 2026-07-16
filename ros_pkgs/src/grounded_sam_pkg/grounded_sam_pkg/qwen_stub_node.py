@@ -8,24 +8,38 @@ projector_node가 cache 방식이라 CPU 추론(30-40s/frame) 환경에서는 �
 from __future__ import annotations
 
 import json
+import time
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
+def _stamp_age_sec(node: Node, msg: Image) -> float | None:
+    stamp = msg.header.stamp
+    stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+    if stamp_ns <= 0:
+        return None
+    age = (node.get_clock().now().nanoseconds - stamp_ns) * 1e-9
+    # Isaac/sim headers and ROS/system clock can use different epochs. In that
+    # case the computed age becomes huge and is less useful than omitting it.
+    if age < 0.0 or age > 3600.0:
+        return None
+    return age
+
+
 LABEL_TO_CATEGORY: dict[str, str] = {
-    # 책으로 데모: 2cm 두께라 panda 그리퍼 4cm 그립공간 안에 깔끔히 들어감.
-    # GraspGen Z 오차 (~18cm) 는 graspgen_node 파라미터로 음수 offset 보정.
-    "book":       "TARGET",
-    # 큰 구체는 panda 그리퍼 그립공간 4cm 보다 커서 잡지 못함 → OBSTACLE.
+    # 투명 유리컵 데모: depth see-through 로 cloud ring 만 잡히지만,
+    # graspgen_node 의 transparent_reconstruct 가 마스크+원통 prior 로 복원.
+    "cup":        "TARGET",
+    "glass cup":  "TARGET",
+    "mug":        "TARGET",
+    # 빨간 공 및 책 — grasp 대상.
     "apple":      "OBSTACLE",
-    "red ball":   "OBSTACLE",
-    "ball":       "OBSTACLE",
-    # 투명 유리컵: depth 통과 → cloud ring 형태만 잡힘 → 부적합.
-    "cup":        "OBSTACLE",
-    "glass cup":  "OBSTACLE",
-    "mug":        "OBSTACLE",
+    "red ball":   "TARGET",
+    "ball":       "TARGET",
+    # 책은 pick 대상.
+    "book":       "TARGET",
     "table":      "DESTINATION",
 }
 
@@ -52,11 +66,16 @@ class QwenStubNode(Node):
         self.get_logger().info("QwenStubNode ready")
 
     def _json_cb(self, msg: String) -> None:
+        t0 = time.monotonic()
         try:
             self._latest_detections = json.loads(msg.data)
         except json.JSONDecodeError as e:
             self.get_logger().warn(f"detections_json parse error: {e}")
             return
+        self.get_logger().info(
+            f"[PROFILE][qwen_stub][json] parse={time.monotonic() - t0:.6f}s "
+            f"detections={len(self._latest_detections)}"
+        )
         # mask가 detections_json보다 먼저 도착한 경우 (race condition) 즉시 처리
         if self._pending_mask is not None:
             self.get_logger().info("detections_json 도착 — 대기 중인 mask 처리")
@@ -71,6 +90,7 @@ class QwenStubNode(Node):
         self._process(mask_msg)
 
     def _process(self, mask_msg: Image) -> None:
+        t0 = time.monotonic()
         labeled = []
         for det in self._latest_detections:
             category = LABEL_TO_CATEGORY.get(
@@ -80,6 +100,12 @@ class QwenStubNode(Node):
         # publish detections BEFORE mask so projector has latest when triggered
         self._pub_detections.publish(String(data=json.dumps(labeled)))
         self._pub_mask.publish(mask_msg)
+        age = _stamp_age_sec(self, mask_msg)
+        age_text = f"{age:.3f}s" if age is not None else "n/a"
+        self.get_logger().info(
+            f"[PROFILE][qwen_stub] total={time.monotonic() - t0:.6f}s "
+            f"detections={len(labeled)} mask_input_age={age_text}"
+        )
 
 
 def main(args=None) -> None:

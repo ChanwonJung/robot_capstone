@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 from typing import Dict, Any, Union
 
 import cv2
@@ -92,14 +93,19 @@ class GroundedSAMPipeline:
         Returns:
             dict with keys: detections, phrases, image_bgr, masks, mask_scores
         """
+        t_total = time.monotonic()
+        t_load = time.monotonic()
         if isinstance(image, str):
             image_bgr = cv2.imread(str(Path(image).expanduser()))
             if image_bgr is None:
                 raise FileNotFoundError(f"Failed to read image: {image}")
         else:
             image_bgr = image
+        dt_load = time.monotonic() - t_load
 
+        t_gdino = time.monotonic()
         detections, phrases = self.gdino.predict(image_bgr=image_bgr, prompt=prompt)
+        dt_gdino = time.monotonic() - t_gdino
 
         if len(detections.xyxy) == 0:
             return {
@@ -108,8 +114,16 @@ class GroundedSAMPipeline:
                 "image_bgr": image_bgr,
                 "masks": None,
                 "mask_scores": None,
+                "profile": {
+                    "image_load_sec": dt_load,
+                    "gdino_sec": dt_gdino,
+                    "sam_sec": 0.0,
+                    "total_sec": time.monotonic() - t_total,
+                    "num_detections": 0,
+                },
             }
 
+        t_sam = time.monotonic()
         boxes_torch = torch.tensor(
             detections.xyxy, dtype=torch.float32, device=self.sam.device
         )
@@ -124,6 +138,7 @@ class GroundedSAMPipeline:
             image_bgr=image_bgr,
             boxes_xyxy=boxes_torch,
         )
+        dt_sam = time.monotonic() - t_sam
 
         return {
             "detections": detections,
@@ -132,4 +147,11 @@ class GroundedSAMPipeline:
             "masks": masks,
             "mask_scores": mask_scores,
             "runtime_devices": runtime_devices,
+            "profile": {
+                "image_load_sec": dt_load,
+                "gdino_sec": dt_gdino,
+                "sam_sec": dt_sam,
+                "total_sec": time.monotonic() - t_total,
+                "num_detections": int(len(detections.xyxy)),
+            },
         }

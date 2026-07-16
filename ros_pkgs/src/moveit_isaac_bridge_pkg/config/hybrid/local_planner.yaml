@@ -3,15 +3,10 @@
 robot_description: "robot_description"
 trajectory_operator_plugin_name: "moveit_hybrid_planning/SimpleSampler"
 local_constraint_solver_plugin_name: "moveit_hybrid_planning/ForwardTrajectory"
-# Low rate on purpose: ForwardTrajectory aborts after a HARD-CODED number of
-# "stuck" iterations while holding at a collision. Hold time before abort =
-# (threshold iters / frequency). 2 Hz is the sweet spot — anything lower
-# makes the motion visibly choppy because the local only updates the joint
-# command every (1 / frequency) seconds. The stop+resume demo keeps the
-# hold inside the ~2 s abort budget by capping the injector's
-# clear_timeout_sec well below 2 s (set in hazard_collision_injector.launch.py).
-# (Known hybrid-demo limitation, moveit2 #819.)
-local_planning_frequency: 2.0
+# Lowered to 1.5 Hz for robust stop+resume hold time.
+# ForwardTrajectory aborts after ~20 stuck iterations; hold time = 20/1.5 ≈ 13s.
+# Ensures stable halt even under collision stress.
+local_planning_frequency: 1.5
 global_solution_topic: "global_trajectory"
 
 # Output: stream joint positions as Float64MultiArray (group joint order).
