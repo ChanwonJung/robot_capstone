@@ -21,6 +21,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -159,6 +160,12 @@ def generate_launch_description() -> LaunchDescription:
             default_value='30000',
             description='SwinDRNet ZMQ timeout (ms)',
         ),
+        DeclareLaunchArgument(
+            'rviz',
+            default_value='false',
+            description='Open RViz2 preloaded with graspgen displays '
+                        '(/graspgen/target_cloud restored cup + /grasp_markers)',
+        ),
     ]
 
     node = Node(
@@ -197,4 +204,13 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    return LaunchDescription(args + [node])
+    rviz_node = Node(
+        package    = 'rviz2',
+        executable = 'rviz2',
+        name       = 'graspgen_rviz',
+        arguments  = ['-d', os.path.join(pkg, 'rviz', 'graspgen.rviz')],
+        condition  = IfCondition(LaunchConfiguration('rviz')),
+        output     = 'screen',
+    )
+
+    return LaunchDescription(args + [node, rviz_node])

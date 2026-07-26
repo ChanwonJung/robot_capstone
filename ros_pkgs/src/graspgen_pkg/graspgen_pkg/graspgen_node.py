@@ -368,7 +368,7 @@ class GraspGenNode(Node):
                 or self._ee_K is None
                 or self._mask is None):
             return
-        self.get_logger().info('캐시 완료 — 대기 중인 world_map_result 처리')
+        self.get_logger().debug('캐시 완료 — 대기 중인 world_map_result 처리')
         msg      = String()
         msg.data = self._pending_result
         self._pending_result = None
@@ -400,7 +400,7 @@ class GraspGenNode(Node):
             return
 
         # [디버그] 원본 EE depth 범위 확인
-        self.get_logger().info(
+        self.get_logger().debug(
             f'[디버그] 원본 ee_depth: shape={self._ee_depth.shape} '
             f'dtype={self._ee_depth.dtype} '
             f'min={self._ee_depth.min():.6f} max={self._ee_depth.max():.6f} '
@@ -413,7 +413,7 @@ class GraspGenNode(Node):
         inf_mask = ~np.isfinite(ee_depth_clean)
         if inf_mask.any():
             ee_depth_clean[inf_mask] = 0.0
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'inf/NaN {inf_mask.sum()} px (센서 레인지 밖) → 0 = invalid')
         self._ee_depth = ee_depth_clean
 
@@ -470,7 +470,7 @@ class GraspGenNode(Node):
         glass_region = self._ee_depth[glass_mask]
 
         if glass_region.size > 0:
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'[진단] Glass mask 영역 깊이: '
                 f'size={glass_region.size}, '
                 f'min={np.nanmin(glass_region):.6f}, '
@@ -486,20 +486,58 @@ class GraspGenNode(Node):
         # 못하면 복원 실패로 보고하고 raw depth 로 진행한다 — 실패를 감추지 말 것.
         pts_world = None
         if self._tr_enabled and self._is_transparent_target():
-            self.get_logger().info('[투명복원] 투명 TARGET 감지')
+            self.get_logger().debug('[투명복원] 투명 TARGET 감지')
 
             if self._swindrnet_enabled and self._swindrnet_client:
                 try:
                     import cv2
                     t_swin = time.monotonic()
 
-                    # SwinDRNet 입력: EE RGB (RGB 순서 — DREDS 는 PIL 로드) +
-                    # broken depth (미터, 0=invalid, 정규화 금지) + intrinsics.
+                    # ── fine-tune 전처리와 1:1 일치 (필수) ──────────────────
+                    # 모델은 컵중심 252 크롭 → 224, 컵=구멍(0), off-center pp 로
+                    # 학습됨(finetune_swindrnet.py CupDS). 풀프레임을 그대로 넣으면
+                    # 스케일/FOV 가 out-of-distribution 이 되어 fine-tune 효과가
+                    # 사라진다. 여기서 학습과 동일한 크롭 입력을 만들어 보낸다.
+                    # (대조실험: 크롭+use_pp 경로가 학습경로와 컵 L1 ~1mm 일치 확인.)
+                    CROP = 252
                     rgb_uint8 = self._ee_rgb.astype(np.uint8)
+                    Hf, Wf = self._ee_depth.shape[:2]
 
-                    restored_depth = self._swindrnet_client.restore(
-                        rgb_uint8, self._ee_depth, self._ee_K)
+                    m_cup = (self._mask == target_val)
+                    ys, xs = np.where(m_cup)
+                    if len(xs) < 30:
+                        raise RuntimeError(
+                            f'유리 마스크 픽셀 부족 ({len(xs)}) — 252 크롭 불가')
+                    ccx, ccy = float(xs.mean()), float(ys.mean())
+                    x0 = int(np.clip(round(ccx - CROP // 2), 0, max(0, Wf - CROP)))
+                    y0 = int(np.clip(round(ccy - CROP // 2), 0, max(0, Hf - CROP)))
+
+                    # 컵 영역을 구멍(0=invalid)으로 만든 뒤 크롭 (see-through
+                    # 값을 모델이 채우게). broken depth 는 미터, 정규화 금지.
+                    depth_hole = self._ee_depth.copy()
+                    depth_hole[m_cup] = 0.0
+                    depth_crop = depth_hole[y0:y0 + CROP, x0:x0 + CROP]
+                    rgb_crop = rgb_uint8[y0:y0 + CROP, x0:x0 + CROP]
+
+                    # 크롭은 초점거리 불변, principal point 만 (x0,y0) 이동.
+                    # use_pp=True 로 서버가 이 off-center pp 를 쓰게 한다.
+                    K_crop = self._ee_K.astype(np.float64).copy()
+                    K_crop[0, 2] -= x0
+                    K_crop[1, 2] -= y0
+
+                    rest_crop = self._swindrnet_client.restore(
+                        rgb_crop, depth_crop, K_crop, use_pp=True)  # (CROP, CROP)
                     dt_swin = time.monotonic() - t_swin
+
+                    # 복원 패치를 풀프레임 depth 의 크롭 위치에 되붙임 (컵 밖은
+                    # raw depth 유지 — 배경은 원래 정상). 이후 extract_target_cloud
+                    # 은 풀프레임 K 로 그대로 back-project.
+                    restored_depth = self._ee_depth.copy()
+                    restored_depth[y0:y0 + CROP, x0:x0 + CROP] = rest_crop
+                    self.get_logger().debug(
+                        f'[투명복원] 크롭 x0={x0} y0={y0} '
+                        f'centroid=({ccx:.0f},{ccy:.0f}) pp→'
+                        f'({K_crop[0,2]:.0f},{K_crop[1,2]:.0f}) use_pp=True')
 
                     # 복원 품질 평가: TARGET 마스크 안에서 모델이 raw 대비
                     # 얼마나 depth 를 당겼는가 (유리 표면은 테이블보다 카메라에
@@ -548,10 +586,10 @@ class GraspGenNode(Node):
 
         # Point cloud 타입 및 형태 확인
         pts_world = np.asarray(pts_world, dtype=np.float32)
-        self.get_logger().info(f'TARGET {len(pts_world)} pts → GraspGen (shape={pts_world.shape}, dtype={pts_world.dtype})')
+        self.get_logger().debug(f'TARGET {len(pts_world)} pts → GraspGen (shape={pts_world.shape}, dtype={pts_world.dtype})')
 
         # [디버그] pts_world 좌표 범위 확인
-        self.get_logger().info(
+        self.get_logger().debug(
             f'[디버그] pts_world 좌표범위: '
             f'X [{pts_world[:, 0].min():.6f}, {pts_world[:, 0].max():.6f}] '
             f'Y [{pts_world[:, 1].min():.6f}, {pts_world[:, 1].max():.6f}] '
@@ -576,7 +614,7 @@ class GraspGenNode(Node):
             self._target_short_axis = np.array([short2d[0], short2d[1], 0.0])
             self._target_short_axis /= (np.linalg.norm(self._target_short_axis) + 1e-12)
             ratio = float(evals[0] / (evals[1] + 1e-12))
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'TARGET PCA: short_axis=({short2d[0]:+.2f}, {short2d[1]:+.2f}) '
                 f'분산비={ratio:.2f}')
         except (ValueError, np.linalg.LinAlgError) as e:
@@ -587,7 +625,7 @@ class GraspGenNode(Node):
             t_zmq = time.monotonic()
             grasps, confs = self._client.request(pts_world, self._num_grasps, self._topk)
             dt_zmq = time.monotonic() - t_zmq
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'[PROFILE][graspgen][zmq] round_trip={dt_zmq:.3f}s '
                 f'input_points={len(pts_world)} num_grasps={self._num_grasps} topk={self._topk}'
             )
@@ -612,7 +650,7 @@ class GraspGenNode(Node):
                 keep     = z_vals >= z_floor
                 n_drop   = int((~keep).sum())
                 if n_drop:
-                    self.get_logger().info(
+                    self.get_logger().debug(
                         f'Workspace filter: dropped {n_drop}/{len(grasps)} '
                         f'grasp(s) with z < {z_floor:.3f}m')
                 grasps = grasps[keep]
@@ -632,7 +670,7 @@ class GraspGenNode(Node):
             keep   = confs >= self._min_quality
             n_drop = int((~keep).sum())
             if n_drop:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'min_quality filter: dropped {n_drop}/{len(grasps)} '
                     f'grasp(s) with conf < {self._min_quality:.2f}')
             grasps = grasps[keep]
@@ -666,7 +704,7 @@ class GraspGenNode(Node):
                 for c in candidates:
                     c['position'][0] = cx
                     c['position'][1] = cy
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'XY override: ({cx:+.3f}, {cy:+.3f}) applied to '
                     f'{len(candidates)} candidate(s)')
             except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -705,7 +743,7 @@ class GraspGenNode(Node):
                 for c in candidates:
                     c['quaternion'] = quat_td
                     c['position'][2] = wrist_z
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'force_top_down: 수직 grasp (+X=({x_axis[0]:+.2f},'
                     f'{x_axis[1]:+.2f}), fingertip_z={fingertip_z:.3f}, '
                     f'wrist_z={wrist_z:.3f}) → {len(candidates)} candidate(s)')
@@ -742,7 +780,7 @@ class GraspGenNode(Node):
                     R_new = np.column_stack([x_new, y_new, z_w])
                     c['quaternion'] = Rot.from_matrix(R_new).as_quat().tolist()
                     n_done += 1
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'Yaw align: short_axis=world-{axis_name} '
                     f'(dx={dx:.3f}, dy={dy:.3f}) applied to {n_done}/{len(candidates)}')
             except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -762,7 +800,7 @@ class GraspGenNode(Node):
             candidates = top_down_filter(
                 candidates, self._td_angle_deg, logger=self.get_logger())
             dt_top_down = time.monotonic() - t_top_down
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'top_down(≤{self._td_angle_deg:.0f}°): '
                 f'{candidates_before} → {len(candidates)}')
             if not candidates:
@@ -781,7 +819,7 @@ class GraspGenNode(Node):
                 self.get_logger().warn(
                     f'IK service unavailable — pass-through ({n_before_ik} kept)')
             else:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'IK feasibility: {ik_stats["kept"]}/{ik_stats["checked"]} '
                     f'reachable  elapsed={ik_dt:.2f}s')
             if not candidates:
@@ -817,7 +855,7 @@ class GraspGenNode(Node):
 
         best_q = candidates[0]['quality'] if candidates else 0.0
         total_dt = time.monotonic() - t0
-        self.get_logger().info(
+        self.get_logger().debug(
             f'[PROFILE][graspgen] total={total_dt:.3f}s extract_cloud={dt_extract:.3f}s '
             f'pca={dt_pca:.3f}s zmq={dt_zmq:.3f}s workspace={dt_workspace:.3f}s '
             f'quality={dt_quality:.3f}s build_candidates={dt_build:.3f}s '
