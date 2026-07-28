@@ -20,39 +20,11 @@ from __future__ import annotations
 
 import numpy as np
 from geometry_msgs.msg import Vector3
-from geometry_msgs.msg import Vector3
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
 _NS = 'vgn_grasps'
-
-# Franka Panda gripper geometry (metres)
-_FINGER_LEN = 0.060   # finger length along Z (from fingertip toward palm)
-_FINGER_W   = 0.020   # finger width in X (spread direction)
-_FINGER_D   = 0.018   # finger depth in Y
-_PALM_LEN   = 0.028   # palm thickness in Z
-_WRIST_LEN  = 0.030   # wrist stub thickness in Z
-
-
-def _cube(frame, stamp, mid, center, quat, sx, sy, sz, color):
-    m = Marker()
-    m.header.frame_id     = frame
-    m.header.stamp        = stamp
-    m.ns                  = _NS
-    m.id                  = mid
-    m.type                = Marker.CUBE
-    m.action              = Marker.ADD
-    m.pose.position.x     = float(center[0])
-    m.pose.position.y     = float(center[1])
-    m.pose.position.z     = float(center[2])
-    m.pose.orientation.x  = float(quat[0])
-    m.pose.orientation.y  = float(quat[1])
-    m.pose.orientation.z  = float(quat[2])
-    m.pose.orientation.w  = float(quat[3])
-    m.scale               = Vector3(x=float(sx), y=float(sy), z=float(sz))
-    m.color               = color
-    return m
 
 # Franka Panda gripper geometry (metres)
 _FINGER_LEN = 0.060   # finger length along Z (from fingertip toward palm)
@@ -101,7 +73,6 @@ def build_grasp_markers(
     """
     from scipy.spatial.transform import Rotation as Rot
 
-    clear_m              = Marker()
     clear_m              = Marker()
     clear_m.header.frame_id = frame
     clear_m.header.stamp    = stamp
