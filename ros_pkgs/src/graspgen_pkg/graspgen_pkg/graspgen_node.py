@@ -148,11 +148,16 @@ class GraspGenNode(Node):
         # finger 가 객체에 걸리는 문제를 근본 해결. 평판/책에 권장.
         # align_yaw_with_bbox_short_axis 보다 우선 적용됨.
         p('force_top_down_orientation', False)
-        # force_top_down 일 때 fingertip 의 목표 z 를 TARGET centroid 기준
-        # 으로 결정론적으로 설정 (GraspGen 의 scatter 된 z 무시).
-        # fingertip_z = centroid_z + 이 값. 0 이면 정확히 centroid 높이에서
-        # 잡음 (책 중간). 음수면 더 깊이, 양수면 더 위. wrist 는 자동으로
-        # fingertip + 0.103 (panda_link8→fingertip) 위로 설정됨.
+        # force_top_down 일 때 fingertip 의 목표 z 를 "복원된 TARGET 포인트
+        # 클라우드의 실제 높이 분포" 기준으로 결정 (GraspGen 의 scatter 된 z,
+        # 그리고 투명물체에서 see-through 라 테이블 높이(≈0)로 찍히는 projector
+        # centroid[2] 를 둘 다 무시한다).
+        #   z_bot=10퍼센타일, z_top=90퍼센타일
+        #   fingertip_z = z_bot + z_frac*(z_top - z_bot) + z_offset
+        # z_frac: 0=바닥(테이블), 1=상단(rim). 0.65 = 몸통 상단부(벽 확실히
+        #   잡고 테이블 회피). z_offset: 그 위에 얹는 미세 보정(±m).
+        # wrist(panda_link8) 는 자동으로 fingertip + 0.103 위.
+        p('force_top_down_grasp_z_frac',   0.65)
         p('force_top_down_grasp_z_offset', 0.0)
         # ── Client-side grasp filters ────────────────────────────────────
         # The paper recommends publishing ~100 grasps as a goal set, but
@@ -219,6 +224,7 @@ class GraspGenNode(Node):
         self._override_xy   = bool(g('override_xy_with_bbox_center').value)
         self._align_yaw     = bool(g('align_yaw_with_bbox_short_axis').value)
         self._force_top_down = bool(g('force_top_down_orientation').value)
+        self._ftd_grasp_z_frac = float(g('force_top_down_grasp_z_frac').value)
         self._ftd_grasp_z_off = float(g('force_top_down_grasp_z_offset').value)
         self._td_enabled    = bool(g('top_down_filter_enabled').value)
         self._td_angle_deg  = float(g('top_down_angle_deg').value)
@@ -735,18 +741,35 @@ class GraspGenNode(Node):
                 y_axis = np.cross(down, x_axis)
                 R_td   = np.column_stack([x_axis, y_axis, down])
                 quat_td = Rot.from_matrix(R_td).as_quat().tolist()
-                # 결정론적 Z: fingertip 을 centroid_z + offset 에 두고, wrist(panda_link8)
-                # 는 그보다 0.103m 위 (approach=down 이므로 +Z 방향). GraspGen 의
-                # scatter 된 z 를 무시해 "가장 낮은 후보가 1등 → 테이블 뚫음" 방지.
-                fingertip_z = float(centroid[2]) + self._ftd_grasp_z_off
+                # 결정론적 Z: fingertip 을 "복원된 pts_world 의 실제 높이"
+                # 기준으로 둔다. projector 의 centroid[2] 는 투명물체에서
+                # see-through(테이블 높이 ≈0) 라 못 쓴다 — 그걸 쓰면 손끝이
+                # 테이블로 내려가거나(=0) GraspGen scatter z 로 컵 위에서 닫힌다.
+                # z_frac 로 몸통 어디를 잡을지 튜닝. wrist(panda_link8) 는
+                # 그보다 0.103m 위 (approach=down 이므로 +Z 방향).
+                pw    = np.asarray(pts_world, dtype=np.float64)
+                zc    = pw[:, 2]
+                z_bot = float(np.percentile(zc, 10))
+                z_top = float(np.percentile(zc, 90))
+                fingertip_z = (z_bot + self._ftd_grasp_z_frac * (z_top - z_bot)
+                               + self._ftd_grasp_z_off)
                 wrist_z = fingertip_z + 0.103
+                # XY 도 복원 cloud 중심(robust median)으로 센터링. GraspGen 원본
+                # XY 는 컵에서 최대 ~8cm 벗어나 있어 수직 grasp 이 옆으로 빗나감.
+                # projector bbox 대신 복원 cloud 를 쓰는 이유는 Z 앵커와 동일.
+                cx_r = float(np.median(pw[:, 0]))
+                cy_r = float(np.median(pw[:, 1]))
                 for c in candidates:
-                    c['quaternion'] = quat_td
+                    c['quaternion']  = quat_td
+                    c['position'][0] = cx_r
+                    c['position'][1] = cy_r
                     c['position'][2] = wrist_z
-                self.get_logger().debug(
-                    f'force_top_down: 수직 grasp (+X=({x_axis[0]:+.2f},'
-                    f'{x_axis[1]:+.2f}), fingertip_z={fingertip_z:.3f}, '
-                    f'wrist_z={wrist_z:.3f}) → {len(candidates)} candidate(s)')
+                self.get_logger().info(
+                    f'force_top_down: 수직 grasp | cloud z=[{z_bot:.3f},{z_top:.3f}] '
+                    f'frac={self._ftd_grasp_z_frac:.2f} off={self._ftd_grasp_z_off:+.3f} '
+                    f'→ XY=({cx_r:.3f},{cy_r:.3f}) fingertip_z={fingertip_z:.3f} '
+                    f'wrist_z={wrist_z:.3f} (+X=({x_axis[0]:+.2f},{x_axis[1]:+.2f})) '
+                    f'× {len(candidates)}')
             except (KeyError, IndexError, TypeError, ValueError) as e:
                 self.get_logger().warn(f'force_top_down skipped: {e}')
 

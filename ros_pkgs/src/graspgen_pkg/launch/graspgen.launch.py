@@ -73,6 +73,16 @@ def generate_launch_description() -> LaunchDescription:
             default_value='50',
             description='Minimum TARGET point count to trigger inference',
         ),
+        DeclareLaunchArgument(
+            'panda_link8_offset',
+            default_value='0.103',
+            description=(
+                'Shift the grasp pose back along -approach by this many metres '
+                'so panda_link8 lands behind the fingertips. Correct ONLY if '
+                'GraspGen returns a fingertip/TCP-centred pose; set 0.0 if it '
+                'already returns a link8-centred pose (see graspgen_node.py)'
+            ),
+        ),
         # ── Client-side filters (Option A) ────────────────────────────
         DeclareLaunchArgument(
             'top_down_filter_enabled',
@@ -93,6 +103,31 @@ def generate_launch_description() -> LaunchDescription:
             'max_published_grasps',
             default_value='10',
             description='Final cap on the published candidate pool size',
+        ),
+        # ── force top-down / grasp Z tuning ───────────────────────────
+        DeclareLaunchArgument(
+            'force_top_down_orientation',
+            default_value='false',
+            description='Replace GraspGen orientation with a clean vertical '
+                        'top-down grasp (finger spread = PCA short axis). '
+                        'Recommended for the transparent cup / flat objects.',
+        ),
+        DeclareLaunchArgument(
+            'force_top_down_grasp_z_frac',
+            default_value='0.65',
+            description='force_top_down fingertip height along the restored '
+                        'cloud height (0=table, 1=rim). 0.65 = upper body.',
+        ),
+        DeclareLaunchArgument(
+            'force_top_down_grasp_z_offset',
+            default_value='0.0',
+            description='Extra +/- metres on top of the z_frac fingertip height.',
+        ),
+        DeclareLaunchArgument(
+            'override_xy_with_bbox_center',
+            default_value='false',
+            description='Snap each grasp XY to the TARGET bbox centre '
+                        '(centres a vertical grasp on the object).',
         ),
         DeclareLaunchArgument(
             'extrinsics_config',
@@ -183,10 +218,15 @@ def generate_launch_description() -> LaunchDescription:
                 'topk_num_grasps':         LaunchConfiguration('topk_num_grasps'),
                 'min_quality':             LaunchConfiguration('min_quality'),
                 'min_point_count':         LaunchConfiguration('min_point_count'),
+                'panda_link8_offset':      LaunchConfiguration('panda_link8_offset'),
                 'top_down_filter_enabled': LaunchConfiguration('top_down_filter_enabled'),
                 'top_down_angle_deg':      LaunchConfiguration('top_down_angle_deg'),
                 'ik_filter_enabled':       LaunchConfiguration('ik_filter_enabled'),
                 'max_published_grasps':    LaunchConfiguration('max_published_grasps'),
+                'force_top_down_orientation':    LaunchConfiguration('force_top_down_orientation'),
+                'force_top_down_grasp_z_frac':   LaunchConfiguration('force_top_down_grasp_z_frac'),
+                'force_top_down_grasp_z_offset': LaunchConfiguration('force_top_down_grasp_z_offset'),
+                'override_xy_with_bbox_center':  LaunchConfiguration('override_xy_with_bbox_center'),
                 'extrinsics_config':LaunchConfiguration('extrinsics_config'),
                 'world_frame':      LaunchConfiguration('world_frame'),
                 'robot_frame':      LaunchConfiguration('robot_frame'),
