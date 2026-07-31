@@ -685,6 +685,34 @@ def find_franka_root(stage):
     return None
 
 
+# ── Table collision approximation ─────────────────────────────────────────────
+# simple_room.usd 의 상판(table_low) 은 physics:approximation = convexDecomposition
+# 으로 저작돼 있다. VHACD 계열 볼록 분해는 메쉬를 복셀화해 볼록 덩어리(최대 64개)
+# 로 근사하므로 hull 이 원본 표면보다 위로 부푼다. 실측 결과 컵 자리에서
+#   비주얼 상판 = -0.00137   /   충돌 표면 = +0.01526   → 16.6mm 어긋남
+# 이 때문에 상판에 정확히 올려둔 물체가 충돌 형상 안에 파묻힌 채로 시작하고,
+# 그리퍼가 건드려 깨우는 순간 PhysX 가 침투를 해소하며 물체를 위로 튕겼다("뿅").
+#
+# 볼록 분해는 *동적* 강체에만 필요한 제약이다. 테이블은 정적이라 삼각형 메쉬
+# 충돌을 그대로 쓸 수 있고 그게 정확하다. 에셋에 physxCookedData:triangleMesh
+# 가 이미 구워져 있어(195KB) 쿠킹 비용도 추가로 들지 않는다.
+TABLE_COLLIDER_PATH = "/background/table_low_327/table_low"
+
+
+def fix_table_collision(stage):
+    """상판 콜라이더를 볼록 분해 → 정확 삼각형 메쉬로 교체."""
+    prim = stage.GetPrimAtPath(TABLE_COLLIDER_PATH)
+    if not prim or not prim.IsValid():
+        print(f"[table-collision] {TABLE_COLLIDER_PATH} 없음 — 건너뜀")
+        return
+    attr = prim.GetAttribute("physics:approximation")
+    if not attr:
+        attr = UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr()
+    before = attr.Get()
+    attr.Set("none")          # "none" = 근사 없음 = 원본 삼각형 메쉬
+    print(f"[table-collision] approximation {before} → none (정확 삼각형 메쉬)")
+
+
 # ── Gripper friction (panda fingers) ──────────────────────────────────────────
 # Isaac Sim default PhysX material friction (~0.5) is too low for reliable
 # top-down grasps of flat/thin objects (book). Boost static/dynamic friction
@@ -750,6 +778,57 @@ def _bind_physics_material(target_prim, material_prim):
         )
         bound_any = True
     return bound_any
+
+
+# ── Gripper drive strength (panda fingers) ────────────────────────────────────
+# Isaac 기본 Franka 에셋의 손가락 드라이브는 maxForce=7.2N / stiffness=400 이다.
+# 실제 Franka 그리퍼는 연속 70N 을 내므로 한참 약하다. 유리컵(Ø48mm 콜라이더)에서
+# 관측된 증상: CLOSE 시 손가락이 pos=0.0257m(폭 51.4mm)에서 멈춤 — 컵보다 3.2mm
+# 넓은 지점이다. 요구 힘 = stiffness × 오차 = 400 × 0.0257 = 10.3N 인데 maxForce
+# 7.2N 에서 잘려 더 조이지 못한 것. 정상력이 부족하니 μ=4 여도 마찰이 안 나오고,
+# 들어 올릴 때 컵이 미끄러져 빠졌다.
+#
+# stiffness 를 같이 올리는 이유: maxForce 만 올려도 400×0.0257=10.3N 이 상한이라
+# 큰 차이가 없다. 힘은 min(stiffness × 오차, maxForce) 로 결정된다.
+# damping 은 stiffness/damping 비(=5)를 원본과 동일하게 유지 — 솔버 진동 방지.
+FINGER_JOINT_NAMES = ("panda_finger_joint1", "panda_finger_joint2")
+GRIPPER_DRIVE_STIFFNESS = 5000.0
+GRIPPER_DRIVE_DAMPING   = 1000.0
+GRIPPER_DRIVE_MAX_FORCE = 50.0    # 실제 Franka 70N 보다 보수적으로
+
+
+def boost_gripper_drive(stage):
+    """손가락 프리즈매틱 조인트의 드라이브 강성/최대힘을 올린다."""
+    franka_root = find_franka_root(stage)
+    if franka_root is None:
+        print("[gripper-drive] Franka root not found — skipped")
+        return
+
+    touched = []
+    for prim in Usd.PrimRange(franka_root):
+        if prim.GetName() not in FINGER_JOINT_NAMES:
+            continue
+        max_force_attr = prim.GetAttribute("drive:linear:physics:maxForce")
+        if not max_force_attr:
+            # joint2 는 보통 mimic joint 라 자체 드라이브가 없다. joint1 만 조이면
+            # mimic 제약이 반대쪽을 따라오므로 건드리지 않는 게 맞다.
+            print(f"[gripper-drive] {prim.GetName()}: linear drive 없음 "
+                  f"(mimic joint 로 추정) — 건너뜀")
+            continue
+        stiff_attr = prim.GetAttribute("drive:linear:physics:stiffness")
+        damp_attr  = prim.GetAttribute("drive:linear:physics:damping")
+        before = (stiff_attr.Get(), damp_attr.Get(), max_force_attr.Get())
+        stiff_attr.Set(GRIPPER_DRIVE_STIFFNESS)
+        damp_attr.Set(GRIPPER_DRIVE_DAMPING)
+        max_force_attr.Set(GRIPPER_DRIVE_MAX_FORCE)
+        touched.append(f"{prim.GetName()} {before} → "
+                       f"({GRIPPER_DRIVE_STIFFNESS}, {GRIPPER_DRIVE_DAMPING}, "
+                       f"{GRIPPER_DRIVE_MAX_FORCE})")
+
+    if touched:
+        print("[gripper-drive] " + " | ".join(touched))
+    else:
+        print("[gripper-drive] 손가락 조인트를 찾지 못함 — 변경 없음")
 
 
 def apply_gripper_friction(stage):
@@ -1044,7 +1123,9 @@ def apply_scene():
     if table_prim and table_prim.IsValid():
         table_prim.SetActive(False)
     build_tabletop_items(stage, f"{additions_root.GetPath()}/TabletopItems")
+    fix_table_collision(stage)
     apply_gripper_friction(stage)
+    boost_gripper_drive(stage)
     # === Mode toggle ===
     # Capture mode  : `build_capture_humans` ON, `build_hazards` OFF
     # Hazard mode   : `build_capture_humans` OFF, `build_hazards` ON (default flight scenario)
