@@ -47,7 +47,17 @@ APPLE_TRANSLATE = np.array([-2.43, 3.18, 0.682])   # 0.7배 축소 후 바닥 �
 APPLE_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
 APPLE_VISUAL_TRANSLATE = np.array([-4.691566, -83.639191, 65.429489])
 APPLE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 1.85])
-GLASS_TRANSLATE = np.array([-2.23, 3.03, 0.733])   # 0.7배 축소 후 바닥 보정 (원래 0.71)
+# z 는 컵 바닥이 테이블 상판 면에 정확히 닿도록 측정으로 맞춘 값 (0.71 → 0.733 → 0.72863).
+# 부모 TabletopItems 가 z=-0.730 이므로 월드 z = 0.72863-0.730 = -0.00137.
+# 유리컵은 콜라이더 바닥 == 비주얼 바닥 == root 원점이다 — GLASS_COLLIDER_TRANSLATE(4.5)
+# 가 원통 반높이(9.0/2)를 정확히 상쇄하므로, root z 를 상판 면에 맞추면 그대로 안착한다.
+#
+# 상판 면 = -0.00137. table_low 메쉬에서 컵 XY 를 덮는 삼각형을 직접 찾아 잰 값이다
+# (윗면 -0.00137 / 아랫면 -0.07122, 두께 70mm). 상판이 큰 면 몇 장짜리 성긴 메쉬라
+# 컵 주변 35cm 안에 정점이 1개뿐 — 정점 최댓값(+0.01041)이나 bbox 로는 못 잰다.
+# 주의: PhysX 레이캐스트는 여기서 +0.01526 을 준다(비주얼보다 16.6mm 위). 충돌면과
+# 비주얼면이 어긋나 있으니, 이 값을 상판으로 쓰면 컵이 눈에 띄게 뜬다.
+GLASS_TRANSLATE = np.array([-2.23, 3.03, 0.72863])
 GLASS_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 GLASS_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 4.5])
 RED_BALL_TRANSLATE = np.array([-1.85, 2.97, 0.84])   # 0.7배 축소 후 바닥 보정 (원래 0.88)
@@ -65,7 +75,14 @@ BASKET_SCALE = np.array([0.17, 0.17, 0.17])
 # 1.0 = 원래 크기. 바구니(BASKET)는 목적지라 제외.
 _TABLETOP_SCALE = 0.7
 APPLE_SCALE = np.array([0.001, 0.001, 0.001]) * _TABLETOP_SCALE
-GLASS_SCALE = np.array([0.02, 0.02, 0.02]) * _TABLETOP_SCALE
+# 원본 에셋은 150.2mm 지름 x 133.4mm 높이 — 컵이 아니라 넓적한 사발 비율이고,
+# panda 최대 개폐(80mm)보다 커서 바깥에서 감싸 쥘 수 없었다. (림 파지만 남는데
+# 그건 복원 결과에 '빈 속'이 필요하고, SwinDRNet 은 꽉 찬 덩어리를 내놓는다.)
+#
+# xy 와 z 를 다르게 준다 — 균등 축소로는 사발 비율이 그대로라 '작은 사발'이 된다.
+#   xy 0.00906 → 지름  68mm  (실제 유리컵 6~7cm, 그리퍼 80mm 안쪽)
+#   z  0.01499 → 높이 100mm  (실제 유리컵 9.5~11cm)
+GLASS_SCALE = np.array([0.00906, 0.00906, 0.01499]) * _TABLETOP_SCALE
 RED_BALL_SCALE = np.array([0.05, 0.05, 0.05]) * _TABLETOP_SCALE
 BOOK_SCALE = np.array([0.10, 0.10, 0.10]) * _TABLETOP_SCALE
 # 책 무게 — 평행 그리퍼 grasp 유지를 쉽게 하려고 실제(~0.35kg)보다 가볍게.
