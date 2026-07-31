@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__github__get_me",
+      "Bash(git submodule:*)",
+      "Bash(git checkout *)",
+      "Bash(git merge *)",
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(ros2 topic list:*)",
+      "Bash(ros2 topic info:*)",
+      "Bash(ros2 topic hz:*)",
+      "Bash(ros2 topic echo:*)",
+      "Bash(ros2 node list:*)",
+      "Bash(ros2 node info:*)",
+      "Bash(ros2 action list:*)",
+      "Bash(ros2 param list:*)",
+      "Bash(ros2 param get:*)",
+      "Bash(ros2 pkg list:*)"
+    ]
+  }
+}
