@@ -808,10 +808,26 @@ def _bind_physics_material(target_prim, material_prim):
 # stiffness 를 같이 올리는 이유: maxForce 만 올려도 400×0.0257=10.3N 이 상한이라
 # 큰 차이가 없다. 힘은 min(stiffness × 오차, maxForce) 로 결정된다.
 # damping 은 stiffness/damping 비(=5)를 원본과 동일하게 유지 — 솔버 진동 방지.
+#
+# ── maxForce 50 → 12 (2026-07-31) ────────────────────────────────────────────
+# 50N 은 과했다. gripper_action_server 는 CLOSE 목표를 0.0mm(완전 닫힘)로 주는데
+# 컵이 23.7mm 에서 막으므로 오차가 계속 남는다 → 요구력 5000×0.0237 = 118N 이
+# maxForce 로 잘려 **50N 이 파지 내내 걸린다**. 컵 무게는 1.8N 이다.
+#
+# 증상: pick 은 성공(pre_grasp/grasp/CLOSE 전부 SUCCESS, 23.70mm 접촉)하는데
+# retreat 에서 local planner 가 "stuck for several iterations" 로 abort. grasp
+# (아래로 120mm)와 retreat(위로 150mm)는 제약이 완전히 동일하고 컵을 쥐었는지만
+# 다르다 → 계획 문제가 아니라 팔이 물리적으로 못 올라가는 것. 정확 삼각형 메쉬로
+# 바꾼 상판(fix_table_collision)에 컵이 간격 0 으로 닿아 있어, 50N 으로 짓누르면
+# 컵이 메쉬에 박혀 팔이 못 든다는 가설.
+#
+# 12N 근거: 필요한 건 컵을 놓치지 않을 만큼이지 최대 악력이 아니다.
+# μ=4 이므로 마찰 = 12×4 = 48N, 컵 무게 1.8N 의 26배 여유. 원래 문제였던 기본값
+# 7.2N 보다는 67% 강해 조임 부족(51.4mm 정지)도 재발하지 않는다.
 FINGER_JOINT_NAMES = ("panda_finger_joint1", "panda_finger_joint2")
 GRIPPER_DRIVE_STIFFNESS = 5000.0
 GRIPPER_DRIVE_DAMPING   = 1000.0
-GRIPPER_DRIVE_MAX_FORCE = 50.0    # 실제 Franka 70N 보다 보수적으로
+GRIPPER_DRIVE_MAX_FORCE = 12.0    # 50.0 → 12.0, 위 주석 참조
 
 
 def boost_gripper_drive(stage):
