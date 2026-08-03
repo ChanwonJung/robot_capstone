@@ -1,0 +1,58 @@
+# qwen_a100 — Slow Brain grounding parameters.
+#
+# Loading order (later wins): robot_defaults.yaml -> this file -> launch args.
+#
+# The block below MUST stay keyed `/**`, not `qwen_bridge_node`. robot_defaults
+# is loaded first and is itself `/**`; once a wildcard file has been seen, a
+# node-name-keyed block outranks every later `/**` file — including the one
+# `ros2 launch` generates for its inline overrides. Keying this block by node
+# name therefore silently discards every launch argument whose key also appears
+# here (image_path, instruction, model_name, vllm_endpoint_url, ...): the launch
+# still starts, it just ignores what you passed.
+
+/**:
+  ros__parameters:
+
+    # ── Remote endpoint ──────────────────────────────────────────────────────
+    # Reached through the SSH tunnel opened by launch_env.bash:
+    #   localhost:8000 -> tta@123.37.28.208:8000 (A100, loopback-only)
+    # Same host as GraspGen (5556) and SwinDRNet (5557).
+    vllm_endpoint_url: "http://localhost:8000/v1"
+    # Qwen3.5-27B, registered on the vLLM server under the short id below.
+    # This must match the `id` from `curl -s localhost:8000/v1/models` exactly —
+    # a mismatch 404s at inference time, not at startup.
+    model_name: "qwen35-local"
+
+    # Generous — a cold model plus a large image can take tens of seconds, and
+    # a spurious timeout costs a whole scan cycle.
+    timeout_sec: 120.0
+    max_tokens: 2048
+
+    # ── Bounding-box coordinate convention ───────────────────────────────────
+    # How to interpret the box coordinates the VLM returns.
+    #   absolute        — already original-image pixels
+    #   normalized_1000 — 0..1000 grid (common for the Qwen-VL family)
+    #   normalized_1    — 0..1 floats
+    # VERIFY EMPIRICALLY. Wrong values segment confidently incorrect regions
+    # with no error anywhere downstream:
+    #   python3 qwen_a100/qwen_cli.py --image demo/resources/ee_raw.png \
+    #     --instruction "pick the book" --annotate /tmp/boxes.png
+    bbox_convention: "absolute"
+
+    # ── Topics ───────────────────────────────────────────────────────────────
+    image_topic: "/ee_camera/image_raw"
+
+    # Offline test: point at a file to bypass image_topic entirely.
+    #   ros2 launch qwen_a100 qwen_a100.launch.py image_path:=$PWD/demo/resources/ee_raw.png
+    image_path: ""
+    detections_topic: "/qwen/labeled_detections"
+    grounding_topic: "/qwen/grounding_result"
+    source_image_topic: "/qwen/source_image"
+
+    # Seed instruction — leave empty to wait for /user_instruction.
+    # Useful for headless replay without the xterm prompt.
+    instruction: ""
+
+instruction_prompt_node:
+  ros__parameters:
+    topic: "/user_instruction"

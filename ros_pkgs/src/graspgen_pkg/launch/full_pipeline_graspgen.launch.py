@@ -1,7 +1,7 @@
 """
 full_pipeline_graspgen.launch.py — GSAM 추론 파이프라인 전체 (GraspGen 버전)
 
-vgn_grasp_pkg 대신 graspgen_pkg를 사용. 기존 full_pipeline.launch.py와 동일 구조.
+GSAM → qwen_stub → projection → graspgen 를 한 번에 실행하는 레거시 파이프라인.
 
   T1: ros2 launch rgbd_projection rgbd_sim.launch.py    ← Gazebo + RViz (별도 터미널)
   T2: ros2 launch graspgen_pkg full_pipeline_graspgen.launch.py

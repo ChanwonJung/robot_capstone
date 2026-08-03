@@ -13,6 +13,12 @@ venv/
 env/
 ENV/
 gsam_venv/
+# uv-created venvs. uv writes a `.gitignore` containing `*` inside each venv it
+# makes, so these stay invisible to `git status` — list them here anyway so the
+# names are not silently reused. Root-anchored: `python3.12` is also a real
+# subdir name under every venv's and colcon install tree's lib/.
+/capstone/
+/python3.12/
 
 # Packaging artifacts from pip/setuptools/poetry builds
 dist/
@@ -39,6 +45,10 @@ log/
 # ---------- External model source clones ----------
 # Cloned locally for patching/dev — not tracked in git.
 GroundingDINO/
+
+# Upstream ultralytics checkout (~71 MB). We consume ultralytics from the venv,
+# not from this tree; it's here only for reading/patching the source.
+models/yolo26/ultralytics/
 
 # ---------- Isaac Sim ----------
 # Local Isaac Sim installation checked out/extracted inside this repo
@@ -104,6 +114,10 @@ secrets/
 *.pem
 
 # ---------- Editor & OS junk ----------
+# Claude Code: per-machine tool permissions. The shared bits under .claude/
+# (skills/, agents/) stay tracked — only the local override is personal.
+.claude/settings.local.json
+
 # VS Code: ignore personal settings but keep shared ones (extensions.json, launch.json)
 # if your team agrees on them. Adjust the "!" lines to taste.
 .vscode/*

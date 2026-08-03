@@ -1,0 +1,53 @@
+# sam_a100 — SAM 2.1 box-prompted segmentation on the A100.
+#
+# Loading order (later wins): robot_defaults.yaml -> this file -> launch args.
+#
+# Keep this block keyed `/**`, not `sam_mask_node` — see the same note in
+# qwen_a100_params.yaml. A node-name-keyed block outranks the `/**` file that
+# `ros2 launch` generates for its inline overrides, so launch arguments like
+# sam_host/sam_port would be silently ignored.
+
+/**:
+  ros__parameters:
+
+    # ── Remote server ────────────────────────────────────────────────────────
+    # Reached through the SSH tunnel opened by launch_env.bash:
+    #   localhost:5558 -> tta@123.37.28.208:5558 (loopback-only)
+    # 5556 = GraspGen, 5557 = SwinDRNet, 8000 = Qwen. 5558 is SAM's slot.
+    zmq_host: "127.0.0.1"
+    zmq_port: 5558
+    zmq_timeout_ms: 30000
+
+    # ── Topics ───────────────────────────────────────────────────────────────
+    # source_image is the TRIGGER: qwen_bridge publishes it LAST, after the
+    # detections. Triggering on detections instead would race, because ROS 2
+    # gives no ordering guarantee across topics.
+    source_image_topic: "/qwen/source_image"
+    detections_topic:   "/qwen/labeled_detections"
+    mask_topic:         "/sam/mask_image"
+    annotated_topic:    "/sam/annotated_image"
+
+    # The label map MUST match the EE DEPTH resolution, which the projector
+    # uses to index it. Read from CameraInfo at runtime; override only if the
+    # camera_info topic is unavailable.
+    ee_camera_info_topic: "/ee_rgbd_camera/camera_info"
+    mask_width:  0      # 0 = take it from CameraInfo
+    mask_height: 0
+
+    # ── Behaviour ────────────────────────────────────────────────────────────
+    # multimask: ask SAM for 3 candidates per box and keep the best-scoring.
+    # Worth enabling for objects with parts (a mug body vs body+handle) where a
+    # box alone is genuinely ambiguous.
+    multimask: false
+
+    # On overlap, let the LOWER detection index win, i.e. TARGET beats
+    # DESTINATION. Inverts GSAM's "later wins" convention deliberately — a
+    # target sitting over its own destination is the common case, and grasp
+    # quality depends on the target mask staying intact.
+    target_priority: true
+
+    # Below this pixel count a mask is almost certainly a wrong-box artefact
+    # rather than a real object. Warns; does not suppress.
+    min_mask_pixels: 50
+
+    publish_annotated: true

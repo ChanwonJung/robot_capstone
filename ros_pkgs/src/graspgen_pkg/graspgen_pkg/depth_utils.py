@@ -2,7 +2,7 @@
 depth_utils.py — depth decode, intrinsics, extrinsics, backprojection.
 
 Intentionally self-contained: no cross-package imports so graspgen_pkg
-remains independent of vgn_grasp_pkg even though the APIs are similar.
+stays self-contained rather than sharing helpers with other packages.
 """
 from __future__ import annotations
 

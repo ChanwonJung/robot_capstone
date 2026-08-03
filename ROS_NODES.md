@@ -14,12 +14,11 @@
 | `grounded_sam_pkg` | Slow Brain visual grounding — GroundingDINO + SAM inference |
 | `qwen_pkg` | Slow Brain VLM — Qwen detection classification + grounding result |
 | `mask_projection_pkg` | 2D mask + depth → labeled 3D PointCloud2 |
-| `vgn_grasp_pkg` | Slow Brain grasp detection — TSDF + VGN inference |
 | `yolo_hazard_pkg` | Fast Brain hazard detector — YOLO on EE + Top cameras at >30 FPS |
 | `bt_pkg` | BehaviorTree.ROS2 pick-and-place executor + hazard/YOLO support nodes |
 | `moveit_isaac_bridge_pkg` | MoveIt planning + Isaac Sim joint bridge + gripper server |
 | `target_pose_bridge_pkg` | *(legacy)* `/world_map_result` → centroid-offset MoveIt goal poses |
-| `graspgen_pkg` | *(legacy)* ZMQ GraspGen client — superseded by `vgn_grasp_pkg` |
+| `graspgen_pkg` | Slow Brain grasp detection — ZMQ GraspGen client (remote A100). **The active grasp path.** |
 
 ---
 
@@ -150,39 +149,6 @@ Key params: `extrinsics_config` (camera extrinsics YAML, `p_world = R @ p_cam + 
 | SUB | `/grounded_sam/detections_json` | `std_msgs/String` |
 | PUB | `/labeled_points` | `sensor_msgs/PointCloud2` |
 | PUB | `/projection_result` | `std_msgs/String` (JSON centroid summary) |
-
----
-
-## vgn_grasp_pkg
-
-### `vgn_grasp_node`
-
-Depth → signed TSDF (40×40×40) → VGN inference → NMS → semantic bbox filter. Keeps only grasps whose centre falls inside the target `bbox_3d_world` from `/world_map_result`. Does **not** subscribe to `/world_map` (RViz-only topic).
-
-| Direction | Topic | Type | Notes |
-|---|---|---|---|
-| SUB | `/world_map_result` *(trigger)* | `std_msgs/String` | target centroid + bbox |
-| SUB | `/ee_camera/depth_image` | `sensor_msgs/Image` | cached, required |
-| SUB | `/ee_camera/camera_info` | `sensor_msgs/CameraInfo` | cached, required |
-| SUB | `/top_camera/depth_image` | `sensor_msgs/Image` | cached, if `use_top_depth=True` |
-| SUB | `/top_camera/camera_info` | `sensor_msgs/CameraInfo` | cached, if `use_top_depth=True` |
-| PUB | `/grasp_candidates` | `std_msgs/String` | JSON: ranked candidates + target_centroid + stamp |
-| PUB | `/grasp_markers` | `visualization_msgs/MarkerArray` | RViz gripper markers |
-| PUB | `/tsdf_debug` | `sensor_msgs/PointCloud2` | TSDF voxel debug cloud |
-
-Key params: `vgn_model_path` (filename must follow `vgn_<network>.pth`), `min_quality`=0.5, `max_grasp_candidates`=5 (coupled with BT retry budget via `config/robot_defaults.yaml`), `roi_size_m`=0.30, `min_point_count`=50, `use_top_depth`=True, `extrinsics_config`.
-
-TF2: looks up `panda_link0` → `world` to transform grasp poses.
-
-**Launch:** `vgn_grasp.launch.py`, `full_pipeline.launch.py`, `grasp_debug.launch.py`
-
----
-
-### `vgn_grasp_4cam_node` *(4-camera variant)*
-
-Same pipeline as `vgn_grasp_node` plus optional `/right_camera/*` and `/left_camera/*` depth streams (`use_side_depth=True`) with per-camera TSDF weights and `camera_extrinsics_4cam.yaml`. Same pub topics.
-
-**Launch:** `vgn_grasp_4cam.launch.py`, `full_pipeline_4cam.launch.py`
 
 ---
 
@@ -381,7 +347,7 @@ Cancels the active MoveGroup goal when a hazard is detected.
 
 ### `target_pose_bridge_node`
 
-Converts `/world_map_result` into a fixed-orientation centroid-offset grasp pose. Used by the legacy `capstone_pick_pipeline.launch.py` — do **not** run alongside `vgn_grasp_node` (both consume `/world_map_result` to produce competing grasp goals).
+Converts `/world_map_result` into a fixed-orientation centroid-offset grasp pose. Used by the legacy `capstone_pick_pipeline.launch.py` — do **not** run alongside `graspgen_node` (both consume `/world_map_result` to produce competing grasp goals).
 
 | Direction | Topic | Type |
 |---|---|---|
@@ -397,16 +363,16 @@ Key params: `grasp_z_offset`=0.03, `pre_grasp_z_offset`=0.12, fixed approach ori
 
 ### `graspgen_node`
 
-GraspGen inference via remote ZMQ server (`tcp://{zmq_host}:{zmq_port}`, default `127.0.0.1:5556`). Drop-in alternative to `vgn_grasp_node` — identical `/grasp_candidates` JSON schema. Superseded by `vgn_grasp_pkg` in the current pipeline.
+GraspGen inference via remote ZMQ server (`tcp://{zmq_host}:{zmq_port}`, default `127.0.0.1:5556`). The active grasp path. `/grasp_candidates` carries the JSON schema `bt_pkg` expects.
 
 | Direction | Topic | Type | Notes |
 |---|---|---|---|
 | SUB | `/world_map_result` *(trigger)* | `std_msgs/String` | |
 | SUB | `/ee_camera/depth_image` | `sensor_msgs/Image` | cached |
 | SUB | `/ee_camera/camera_info` | `sensor_msgs/CameraInfo` | cached |
-| SUB | `/qwen/mask_image` | `sensor_msgs/Image` | cached |
+| SUB | `/sam/mask_image` | `sensor_msgs/Image` | cached (legacy GSAM path: `/qwen/mask_image`) |
 | SUB | `/qwen/labeled_detections` | `std_msgs/String` | cached |
-| PUB | `/grasp_candidates` | `std_msgs/String` | same schema as VGN |
+| PUB | `/grasp_candidates` | `std_msgs/String` | JSON, latched |
 | PUB | `/grasp_markers` | `visualization_msgs/MarkerArray` | |
 | PUB | `/graspgen/target_cloud` | `sensor_msgs/PointCloud2` | debug |
 
@@ -428,7 +394,7 @@ GraspGen inference via remote ZMQ server (`tcp://{zmq_host}:{zmq_port}`, default
 /top_camera/depth_image   →                             →  /world_map_result
 /qwen/mask_image (trigger)→                             →  /world_cloud_raw   (OctoMap)
 
-/world_map_result  →  vgn_grasp_node  →  /grasp_candidates
+/world_map_result  →  graspgen_node   →  /grasp_candidates
                                       →  /grasp_markers (RViz)
 
 /yolo_hazard/{top,ee}/detections_json  →  hazard_level_translator_node  →  /bt/hazard_level
