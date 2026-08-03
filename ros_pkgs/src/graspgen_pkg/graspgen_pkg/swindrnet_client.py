@@ -61,7 +61,7 @@ class SwinDRNetClient:
             raise
 
     def restore(self, rgb: np.ndarray, broken_depth: np.ndarray,
-                K: np.ndarray) -> np.ndarray:
+                K: np.ndarray, use_pp: bool = False) -> np.ndarray:
         """
         Restore depth for transparent object.
 
@@ -75,6 +75,12 @@ class SwinDRNetClient:
         K : (3, 3)
             Camera intrinsics. The server needs fx/fy to build the XYZ point map
             that forms SwinDRNet's second input branch.
+        use_pp : bool
+            If True, the server uses the off-centre principal point from K
+            (cx/cy scaled to 224) instead of pinning it to the image centre.
+            Required when the input is a cup-centred crop whose pp is off-centre
+            — this matches the fine-tune preprocessing. Default False preserves
+            the centred-pp behaviour for full-frame DREDS-style inputs.
 
         Returns
         -------
@@ -98,6 +104,7 @@ class SwinDRNetClient:
             'rgb': rgb.astype(np.uint8),
             'broken_depth': broken_depth.astype(np.float32),  # Server expects 'broken_depth'
             'K': np.asarray(K, dtype=np.float64).reshape(3, 3),
+            'use_pp': bool(use_pp),
         }
 
         t0 = time.time()
@@ -126,17 +133,25 @@ class SwinDRNetClient:
             return restored_depth
 
         except zmq.error.Again:
+            # A timed-out REQ socket is stuck mid-transaction (recv pending) —
+            # the next send() would raise "Operation cannot be accomplished in
+            # current state". Reset the socket so the next call starts clean.
+            self._reset_socket()
             raise TimeoutError(f"Server timeout after {self.timeout_ms} ms")
         except Exception as e:
             logger.error(f"Request failed: {e}")
-            # Try to reconnect on next call
-            try:
-                self.socket.close()
-                self.context.term()
-            except:
-                pass
-            self._connect()
+            self._reset_socket()
             raise RuntimeError(f"Depth restoration failed: {e}")
+
+    def _reset_socket(self):
+        """Tear down and re-create the REQ socket after a failed transaction."""
+        try:
+            self.socket.setsockopt(zmq.LINGER, 0)
+            self.socket.close()
+            self.context.term()
+        except Exception:
+            pass
+        self._connect()
 
     def close(self):
         """Close connection."""
