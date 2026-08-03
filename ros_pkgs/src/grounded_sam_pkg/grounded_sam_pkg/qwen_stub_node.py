@@ -49,6 +49,21 @@ class QwenStubNode(Node):
     def __init__(self) -> None:
         super().__init__("qwen_stub_node")
 
+        # 아래 표는 "빨간 공 데모" 기준이라 apple 이 OBSTACLE 로 고정돼 있다.
+        # 대상을 바꿔가며 시험할 때 매번 표를 고치지 않도록 런타임 override 를
+        # 둔다. target_label 이 주어지면 그 라벨만 TARGET 이 되고, 원래 TARGET
+        # 이던 다른 라벨은 OBSTACLE 로 내려간다 (TARGET 이 둘이면 graspgen 이
+        # 어느 쪽을 잡을지 모호해지므로). DESTINATION 은 건드리지 않는다.
+        self._target_label = str(
+            self.declare_parameter("target_label", "").value).lower().strip()
+        if self._target_label:
+            self.get_logger().info(
+                f"target_label override: '{self._target_label}' 만 TARGET")
+        else:
+            tgt = [k for k, v in LABEL_TO_CATEGORY.items() if v == "TARGET"]
+            self.get_logger().info(
+                f"target_label 미지정 — 기본 표 사용 (TARGET: {', '.join(tgt)})")
+
         self._latest_detections: list[dict] | None = None
         self._pending_mask: Image | None = None
 
@@ -93,8 +108,14 @@ class QwenStubNode(Node):
         t0 = time.monotonic()
         labeled = []
         for det in self._latest_detections:
-            category = LABEL_TO_CATEGORY.get(
-                det.get("label", "").lower().strip(), "OBSTACLE")
+            label = det.get("label", "").lower().strip()
+            category = LABEL_TO_CATEGORY.get(label, "OBSTACLE")
+            if self._target_label:
+                # override: 지정 라벨만 TARGET, 나머지 TARGET 은 OBSTACLE 로.
+                if label == self._target_label:
+                    category = "TARGET"
+                elif category == "TARGET":
+                    category = "OBSTACLE"
             labeled.append({**det, "category": category})
 
         # publish detections BEFORE mask so projector has latest when triggered
