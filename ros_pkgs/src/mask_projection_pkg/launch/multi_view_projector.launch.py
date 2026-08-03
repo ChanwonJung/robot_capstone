@@ -80,26 +80,37 @@ def _robot_defaults() -> str:
     return os.path.join(root, "config", "robot_defaults.yaml")
 
 
+def _default_extrinsics() -> str:
+    """이 패키지 안의 camera_extrinsics.yaml — Isaac 씬에서 잰 R/t 가 들어 있다."""
+    root = os.environ.get(
+        "ROBOT_CAPSTONE_ROOT",
+        os.path.realpath(os.path.join(
+            get_package_share_directory("mask_projection_pkg"), *([".."] * 4))),
+    )
+    return os.path.join(
+        root, "ros_pkgs", "src", "mask_projection_pkg",
+        "config", "camera_extrinsics.yaml")
+
+
 def generate_launch_description() -> LaunchDescription:
     defaults = _robot_defaults()
 
     # ── declare all arguments ─────────────────────────────────────────────────
     args = [
         # ── Top camera topics ─────────────────────────────────────────────────
-        # Gazebo default: /top_camera/depth_image
-        # Isaac Sim TODO: override to match your bridge output topic
+        # Isaac Sim 브리지가 실제로 내는 이름이 기본값이다 (setup_initial_scene.py 의
+        # build_top_view_bridge). Gazebo 로 쓸 때만 /top_camera/* 로 덮어쓰면 된다.
         DeclareLaunchArgument('top_depth_topic',
-                              default_value='/top_camera/depth_image'),
+                              default_value='/rgbd_camera/depth_image'),
         DeclareLaunchArgument('top_camera_info_topic',
-                              default_value='/top_camera/camera_info'),
+                              default_value='/rgbd_camera/camera_info'),
 
         # ── EE camera topics ──────────────────────────────────────────────────
-        # Gazebo default: /ee_camera/depth_image
-        # Isaac Sim TODO: override to match your bridge output topic
+        # 동 build_ee_view_bridge. Gazebo 는 /ee_camera/* 로 덮어쓸 것.
         DeclareLaunchArgument('ee_depth_topic',
-                              default_value='/ee_camera/depth_image'),
+                              default_value='/ee_rgbd_camera/depth_image'),
         DeclareLaunchArgument('ee_camera_info_topic',
-                              default_value='/ee_camera/camera_info'),
+                              default_value='/ee_rgbd_camera/camera_info'),
 
         # ── Qwen / stub output topics ─────────────────────────────────────────
         # Default: qwen_stub_node (or real Qwen) output.
@@ -127,10 +138,17 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('initials', default_value=''),
 
         # ── Camera extrinsics YAML ────────────────────────────────────────────
-        # Gazebo demo default: package config/camera_extrinsics.yaml
-        # Isaac Sim: override with your own YAML containing R/t from USD stage.
-        #   extrinsics_config:=/path/to/camera_extrinsics_isaac.yaml
-        DeclareLaunchArgument('extrinsics_config', default_value=''),
+        # 기본값 = 이 패키지의 config/camera_extrinsics.yaml (Isaac 씬 실측값).
+        # 다른 씬을 쓸 때만 절대경로로 덮어쓴다.
+        DeclareLaunchArgument('extrinsics_config',
+                              default_value=_default_extrinsics()),
+
+        # ── Freeze after first publish ────────────────────────────────────────
+        # true 면 최초 성공 publish 이후 신규 mask 를 무시한다. EE extrinsics 가
+        # 시작 포즈 기준 정적이라, 팔이 움직인 뒤의 재투영은 어긋난 클라우드를
+        # 만든다 — 그걸 막는다.
+        DeclareLaunchArgument('freeze_after_first_publish',
+                              default_value='false'),
     ]
 
     node = Node(
@@ -154,6 +172,8 @@ def generate_launch_description() -> LaunchDescription:
                 'max_depth':              LaunchConfiguration('max_depth'),
                 'initials':               LaunchConfiguration('initials'),
                 'extrinsics_config':      LaunchConfiguration('extrinsics_config'),
+                'freeze_after_first_publish':
+                    LaunchConfiguration('freeze_after_first_publish'),
             },
         ],
     )

@@ -17,6 +17,9 @@ setup(
         ('share/' + package_name + '/config', [
             'config/graspgen_params.yaml',
         ]),
+        ('share/' + package_name + '/rviz', [
+            'rviz/graspgen.rviz',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

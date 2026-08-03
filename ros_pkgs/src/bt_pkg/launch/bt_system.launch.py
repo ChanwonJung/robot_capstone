@@ -37,6 +37,18 @@ def _robot_defaults() -> str:
     return os.path.join(root, "config", "robot_defaults.yaml")
 
 
+def _default_extrinsics() -> str:
+    """mask_projection_pkg 의 camera_extrinsics.yaml — Isaac 씬 실측 R/t."""
+    root = os.environ.get(
+        "ROBOT_CAPSTONE_ROOT",
+        os.path.realpath(os.path.join(
+            get_package_share_directory("bt_pkg"), *([".."] * 4))),
+    )
+    return os.path.join(
+        root, "ros_pkgs", "src", "mask_projection_pkg",
+        "config", "camera_extrinsics.yaml")
+
+
 def generate_launch_description():
     pkg_share = get_package_share_directory("bt_pkg")
     params_file = os.path.join(pkg_share, "config", "bt_params.yaml")
@@ -45,8 +57,9 @@ def generate_launch_description():
     # ── Launch arguments ────────────────────────────────────────────────────
     ext_arg = DeclareLaunchArgument(
         "extrinsics_config",
-        default_value="",
-        description="Absolute path to camera_extrinsics_isaac.yaml",
+        default_value=_default_extrinsics(),
+        description=("camera_extrinsics.yaml 경로. 기본값은 mask_projection_pkg "
+                     "안의 Isaac 실측본이라 보통 넘길 필요가 없다."),
     )
 
     tree_arg = DeclareLaunchArgument(
