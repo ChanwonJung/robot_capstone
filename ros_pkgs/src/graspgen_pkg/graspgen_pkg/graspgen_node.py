@@ -148,12 +148,28 @@ class GraspGenNode(Node):
         # finger 가 객체에 걸리는 문제를 근본 해결. 평판/책에 권장.
         # align_yaw_with_bbox_short_axis 보다 우선 적용됨.
         p('force_top_down_orientation', False)
-        # force_top_down 일 때 fingertip 의 목표 z 를 TARGET centroid 기준
-        # 으로 결정론적으로 설정 (GraspGen 의 scatter 된 z 무시).
-        # fingertip_z = centroid_z + 이 값. 0 이면 정확히 centroid 높이에서
-        # 잡음 (책 중간). 음수면 더 깊이, 양수면 더 위. wrist 는 자동으로
-        # fingertip + 0.103 (panda_link8→fingertip) 위로 설정됨.
+        # force_top_down 일 때 fingertip 의 목표 z 를 "복원된 TARGET 포인트
+        # 클라우드의 실제 높이 분포" 기준으로 결정 (GraspGen 의 scatter 된 z,
+        # 그리고 투명물체에서 see-through 라 테이블 높이(≈0)로 찍히는 projector
+        # centroid[2] 를 둘 다 무시한다).
+        #   z_bot=10퍼센타일, z_top=90퍼센타일
+        #   fingertip_z = z_bot + z_frac*(z_top - z_bot) + z_offset
+        # z_frac: 0=바닥(테이블), 1=상단(rim). 0.65 = 몸통 상단부(벽 확실히
+        #   잡고 테이블 회피). z_offset: 그 위에 얹는 미세 보정(±m).
+        # wrist(panda_link8) 는 자동으로 fingertip + 0.103 위.
+        p('force_top_down_grasp_z_frac',   0.65)
         p('force_top_down_grasp_z_offset', 0.0)
+        # force_top_down 일 때 XY 를 복원 cloud 의 어느 통계로 잡을지.
+        #   'median' — 점들의 중앙값. 점 밀도가 높은 쪽으로 끌린다.
+        #   'extent' — 실루엣 폭의 중점 (p2+p98)/2. 밀도와 무관.
+        # TARGET 포인트는 EE 카메라 한 시점에서만 나오므로 카메라를 향한 면에
+        # 점이 몰린다. 컵/책은 이 편향이 작지만 구에서는 median 이 눈에 띄게
+        # 밀려 손가락이 하강 중에 공을 쳐버렸다 (여유가 한쪽 5.6mm 뿐 —
+        # 그리퍼 개폐 80mm vs 공 지름 68.8mm). 한쪽 면만 찍혀도 실루엣의
+        # 좌우 끝은 양쪽 다 잡히므로 그 중점은 밀도에 안 흔들린다.
+        # min/max 가 아니라 2/98 퍼센타일인 건 아웃라이어 한두 점 때문.
+        # 기본값은 컵/책에서 검증된 median 을 유지 — 바꾸려면 명시적으로 켤 것.
+        p('grasp_xy_anchor', 'median')
         # ── Client-side grasp filters ────────────────────────────────────
         # The paper recommends publishing ~100 grasps as a goal set, but
         # our MoveIt + BT pipeline is single-goal sequential. We pre-filter
@@ -219,7 +235,14 @@ class GraspGenNode(Node):
         self._override_xy   = bool(g('override_xy_with_bbox_center').value)
         self._align_yaw     = bool(g('align_yaw_with_bbox_short_axis').value)
         self._force_top_down = bool(g('force_top_down_orientation').value)
+        self._ftd_grasp_z_frac = float(g('force_top_down_grasp_z_frac').value)
         self._ftd_grasp_z_off = float(g('force_top_down_grasp_z_offset').value)
+        self._xy_anchor     = str(g('grasp_xy_anchor').value).strip().lower()
+        if self._xy_anchor not in ('median', 'extent'):
+            self.get_logger().warn(
+                f"grasp_xy_anchor='{self._xy_anchor}' 는 알 수 없는 값 — "
+                "'median' 으로 되돌린다 (허용: median | extent)")
+            self._xy_anchor = 'median'
         self._td_enabled    = bool(g('top_down_filter_enabled').value)
         self._td_angle_deg  = float(g('top_down_angle_deg').value)
         self._ik_enabled    = bool(g('ik_filter_enabled').value)
@@ -368,7 +391,7 @@ class GraspGenNode(Node):
                 or self._ee_K is None
                 or self._mask is None):
             return
-        self.get_logger().info('캐시 완료 — 대기 중인 world_map_result 처리')
+        self.get_logger().debug('캐시 완료 — 대기 중인 world_map_result 처리')
         msg      = String()
         msg.data = self._pending_result
         self._pending_result = None
@@ -400,7 +423,7 @@ class GraspGenNode(Node):
             return
 
         # [디버그] 원본 EE depth 범위 확인
-        self.get_logger().info(
+        self.get_logger().debug(
             f'[디버그] 원본 ee_depth: shape={self._ee_depth.shape} '
             f'dtype={self._ee_depth.dtype} '
             f'min={self._ee_depth.min():.6f} max={self._ee_depth.max():.6f} '
@@ -413,7 +436,7 @@ class GraspGenNode(Node):
         inf_mask = ~np.isfinite(ee_depth_clean)
         if inf_mask.any():
             ee_depth_clean[inf_mask] = 0.0
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'inf/NaN {inf_mask.sum()} px (센서 레인지 밖) → 0 = invalid')
         self._ee_depth = ee_depth_clean
 
@@ -470,7 +493,7 @@ class GraspGenNode(Node):
         glass_region = self._ee_depth[glass_mask]
 
         if glass_region.size > 0:
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'[진단] Glass mask 영역 깊이: '
                 f'size={glass_region.size}, '
                 f'min={np.nanmin(glass_region):.6f}, '
@@ -486,20 +509,58 @@ class GraspGenNode(Node):
         # 못하면 복원 실패로 보고하고 raw depth 로 진행한다 — 실패를 감추지 말 것.
         pts_world = None
         if self._tr_enabled and self._is_transparent_target():
-            self.get_logger().info('[투명복원] 투명 TARGET 감지')
+            self.get_logger().debug('[투명복원] 투명 TARGET 감지')
 
             if self._swindrnet_enabled and self._swindrnet_client:
                 try:
                     import cv2
                     t_swin = time.monotonic()
 
-                    # SwinDRNet 입력: EE RGB (RGB 순서 — DREDS 는 PIL 로드) +
-                    # broken depth (미터, 0=invalid, 정규화 금지) + intrinsics.
+                    # ── fine-tune 전처리와 1:1 일치 (필수) ──────────────────
+                    # 모델은 컵중심 252 크롭 → 224, 컵=구멍(0), off-center pp 로
+                    # 학습됨(finetune_swindrnet.py CupDS). 풀프레임을 그대로 넣으면
+                    # 스케일/FOV 가 out-of-distribution 이 되어 fine-tune 효과가
+                    # 사라진다. 여기서 학습과 동일한 크롭 입력을 만들어 보낸다.
+                    # (대조실험: 크롭+use_pp 경로가 학습경로와 컵 L1 ~1mm 일치 확인.)
+                    CROP = 252
                     rgb_uint8 = self._ee_rgb.astype(np.uint8)
+                    Hf, Wf = self._ee_depth.shape[:2]
 
-                    restored_depth = self._swindrnet_client.restore(
-                        rgb_uint8, self._ee_depth, self._ee_K)
+                    m_cup = (self._mask == target_val)
+                    ys, xs = np.where(m_cup)
+                    if len(xs) < 30:
+                        raise RuntimeError(
+                            f'유리 마스크 픽셀 부족 ({len(xs)}) — 252 크롭 불가')
+                    ccx, ccy = float(xs.mean()), float(ys.mean())
+                    x0 = int(np.clip(round(ccx - CROP // 2), 0, max(0, Wf - CROP)))
+                    y0 = int(np.clip(round(ccy - CROP // 2), 0, max(0, Hf - CROP)))
+
+                    # 컵 영역을 구멍(0=invalid)으로 만든 뒤 크롭 (see-through
+                    # 값을 모델이 채우게). broken depth 는 미터, 정규화 금지.
+                    depth_hole = self._ee_depth.copy()
+                    depth_hole[m_cup] = 0.0
+                    depth_crop = depth_hole[y0:y0 + CROP, x0:x0 + CROP]
+                    rgb_crop = rgb_uint8[y0:y0 + CROP, x0:x0 + CROP]
+
+                    # 크롭은 초점거리 불변, principal point 만 (x0,y0) 이동.
+                    # use_pp=True 로 서버가 이 off-center pp 를 쓰게 한다.
+                    K_crop = self._ee_K.astype(np.float64).copy()
+                    K_crop[0, 2] -= x0
+                    K_crop[1, 2] -= y0
+
+                    rest_crop = self._swindrnet_client.restore(
+                        rgb_crop, depth_crop, K_crop, use_pp=True)  # (CROP, CROP)
                     dt_swin = time.monotonic() - t_swin
+
+                    # 복원 패치를 풀프레임 depth 의 크롭 위치에 되붙임 (컵 밖은
+                    # raw depth 유지 — 배경은 원래 정상). 이후 extract_target_cloud
+                    # 은 풀프레임 K 로 그대로 back-project.
+                    restored_depth = self._ee_depth.copy()
+                    restored_depth[y0:y0 + CROP, x0:x0 + CROP] = rest_crop
+                    self.get_logger().debug(
+                        f'[투명복원] 크롭 x0={x0} y0={y0} '
+                        f'centroid=({ccx:.0f},{ccy:.0f}) pp→'
+                        f'({K_crop[0,2]:.0f},{K_crop[1,2]:.0f}) use_pp=True')
 
                     # 복원 품질 평가: TARGET 마스크 안에서 모델이 raw 대비
                     # 얼마나 depth 를 당겼는가 (유리 표면은 테이블보다 카메라에
@@ -548,10 +609,10 @@ class GraspGenNode(Node):
 
         # Point cloud 타입 및 형태 확인
         pts_world = np.asarray(pts_world, dtype=np.float32)
-        self.get_logger().info(f'TARGET {len(pts_world)} pts → GraspGen (shape={pts_world.shape}, dtype={pts_world.dtype})')
+        self.get_logger().debug(f'TARGET {len(pts_world)} pts → GraspGen (shape={pts_world.shape}, dtype={pts_world.dtype})')
 
         # [디버그] pts_world 좌표 범위 확인
-        self.get_logger().info(
+        self.get_logger().debug(
             f'[디버그] pts_world 좌표범위: '
             f'X [{pts_world[:, 0].min():.6f}, {pts_world[:, 0].max():.6f}] '
             f'Y [{pts_world[:, 1].min():.6f}, {pts_world[:, 1].max():.6f}] '
@@ -576,7 +637,7 @@ class GraspGenNode(Node):
             self._target_short_axis = np.array([short2d[0], short2d[1], 0.0])
             self._target_short_axis /= (np.linalg.norm(self._target_short_axis) + 1e-12)
             ratio = float(evals[0] / (evals[1] + 1e-12))
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'TARGET PCA: short_axis=({short2d[0]:+.2f}, {short2d[1]:+.2f}) '
                 f'분산비={ratio:.2f}')
         except (ValueError, np.linalg.LinAlgError) as e:
@@ -587,7 +648,7 @@ class GraspGenNode(Node):
             t_zmq = time.monotonic()
             grasps, confs = self._client.request(pts_world, self._num_grasps, self._topk)
             dt_zmq = time.monotonic() - t_zmq
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'[PROFILE][graspgen][zmq] round_trip={dt_zmq:.3f}s '
                 f'input_points={len(pts_world)} num_grasps={self._num_grasps} topk={self._topk}'
             )
@@ -612,7 +673,7 @@ class GraspGenNode(Node):
                 keep     = z_vals >= z_floor
                 n_drop   = int((~keep).sum())
                 if n_drop:
-                    self.get_logger().info(
+                    self.get_logger().debug(
                         f'Workspace filter: dropped {n_drop}/{len(grasps)} '
                         f'grasp(s) with z < {z_floor:.3f}m')
                 grasps = grasps[keep]
@@ -632,7 +693,7 @@ class GraspGenNode(Node):
             keep   = confs >= self._min_quality
             n_drop = int((~keep).sum())
             if n_drop:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'min_quality filter: dropped {n_drop}/{len(grasps)} '
                     f'grasp(s) with conf < {self._min_quality:.2f}')
             grasps = grasps[keep]
@@ -666,7 +727,7 @@ class GraspGenNode(Node):
                 for c in candidates:
                     c['position'][0] = cx
                     c['position'][1] = cy
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'XY override: ({cx:+.3f}, {cy:+.3f}) applied to '
                     f'{len(candidates)} candidate(s)')
             except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -697,18 +758,58 @@ class GraspGenNode(Node):
                 y_axis = np.cross(down, x_axis)
                 R_td   = np.column_stack([x_axis, y_axis, down])
                 quat_td = Rot.from_matrix(R_td).as_quat().tolist()
-                # 결정론적 Z: fingertip 을 centroid_z + offset 에 두고, wrist(panda_link8)
-                # 는 그보다 0.103m 위 (approach=down 이므로 +Z 방향). GraspGen 의
-                # scatter 된 z 를 무시해 "가장 낮은 후보가 1등 → 테이블 뚫음" 방지.
-                fingertip_z = float(centroid[2]) + self._ftd_grasp_z_off
+                # 결정론적 Z: fingertip 을 "복원된 pts_world 의 실제 높이"
+                # 기준으로 둔다. projector 의 centroid[2] 는 투명물체에서
+                # see-through(테이블 높이 ≈0) 라 못 쓴다 — 그걸 쓰면 손끝이
+                # 테이블로 내려가거나(=0) GraspGen scatter z 로 컵 위에서 닫힌다.
+                # z_frac 로 몸통 어디를 잡을지 튜닝. wrist(panda_link8) 는
+                # 그보다 0.103m 위 (approach=down 이므로 +Z 방향).
+                pw    = np.asarray(pts_world, dtype=np.float64)
+                zc    = pw[:, 2]
+                z_bot = float(np.percentile(zc, 10))
+                z_top = float(np.percentile(zc, 90))
+                fingertip_z = (z_bot + self._ftd_grasp_z_frac * (z_top - z_bot)
+                               + self._ftd_grasp_z_off)
                 wrist_z = fingertip_z + 0.103
+                # XY 도 복원 cloud 중심(robust median)으로 센터링. GraspGen 원본
+                # XY 는 컵에서 최대 ~8cm 벗어나 있어 수직 grasp 이 옆으로 빗나감.
+                # projector bbox 대신 복원 cloud 를 쓰는 이유는 Z 앵커와 동일.
+                # 'extent' 는 실루엣 폭의 중점이라 점 밀도 편향에 안 끌린다
+                # (grasp_xy_anchor 선언부 주석 참조).
+                if self._xy_anchor == 'extent':
+                    xlo, xhi = np.percentile(pw[:, 0], (2.0, 98.0))
+                    ylo, yhi = np.percentile(pw[:, 1], (2.0, 98.0))
+                    cx_r = float((xlo + xhi) * 0.5)
+                    cy_r = float((ylo + yhi) * 0.5)
+                else:
+                    cx_r = float(np.median(pw[:, 0]))
+                    cy_r = float(np.median(pw[:, 1]))
                 for c in candidates:
-                    c['quaternion'] = quat_td
+                    c['quaternion']  = quat_td
+                    c['position'][0] = cx_r
+                    c['position'][1] = cy_r
                     c['position'][2] = wrist_z
+                # 두 앵커를 항상 같이 찍는다 — 한 번 돌리면 편향(Δ)이 바로
+                # 측정된다. 여유가 한쪽 5.6mm 라 이 값이 성패를 가른다.
+                mx = float(np.median(pw[:, 0]))
+                my = float(np.median(pw[:, 1]))
+                ex = float(np.percentile(pw[:, 0], 2.0)
+                           + np.percentile(pw[:, 0], 98.0)) * 0.5
+                ey = float(np.percentile(pw[:, 1], 2.0)
+                           + np.percentile(pw[:, 1], 98.0)) * 0.5
                 self.get_logger().info(
-                    f'force_top_down: 수직 grasp (+X=({x_axis[0]:+.2f},'
-                    f'{x_axis[1]:+.2f}), fingertip_z={fingertip_z:.3f}, '
-                    f'wrist_z={wrist_z:.3f}) → {len(candidates)} candidate(s)')
+                    f'force_top_down: 수직 grasp | cloud z=[{z_bot:.3f},{z_top:.3f}] '
+                    f'frac={self._ftd_grasp_z_frac:.2f} off={self._ftd_grasp_z_off:+.3f} '
+                    f'→ XY=({cx_r:.3f},{cy_r:.3f}) fingertip_z={fingertip_z:.3f} '
+                    f'wrist_z={wrist_z:.3f} (+X=({x_axis[0]:+.2f},{x_axis[1]:+.2f})) '
+                    f'× {len(candidates)}')
+                self.get_logger().info(
+                    f'  xy_anchor={self._xy_anchor} | '
+                    f'median=({mx:.3f},{my:.3f}) extent=({ex:.3f},{ey:.3f}) '
+                    f'Δ=({(ex-mx)*1000:+.1f},{(ey-my)*1000:+.1f})mm | '
+                    f'cloud n={len(pw)} '
+                    f'xy_span=({(np.percentile(pw[:,0],98)-np.percentile(pw[:,0],2))*1000:.1f},'
+                    f'{(np.percentile(pw[:,1],98)-np.percentile(pw[:,1],2))*1000:.1f})mm')
             except (KeyError, IndexError, TypeError, ValueError) as e:
                 self.get_logger().warn(f'force_top_down skipped: {e}')
 
@@ -742,7 +843,7 @@ class GraspGenNode(Node):
                     R_new = np.column_stack([x_new, y_new, z_w])
                     c['quaternion'] = Rot.from_matrix(R_new).as_quat().tolist()
                     n_done += 1
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'Yaw align: short_axis=world-{axis_name} '
                     f'(dx={dx:.3f}, dy={dy:.3f}) applied to {n_done}/{len(candidates)}')
             except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -762,7 +863,7 @@ class GraspGenNode(Node):
             candidates = top_down_filter(
                 candidates, self._td_angle_deg, logger=self.get_logger())
             dt_top_down = time.monotonic() - t_top_down
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'top_down(≤{self._td_angle_deg:.0f}°): '
                 f'{candidates_before} → {len(candidates)}')
             if not candidates:
@@ -781,7 +882,7 @@ class GraspGenNode(Node):
                 self.get_logger().warn(
                     f'IK service unavailable — pass-through ({n_before_ik} kept)')
             else:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'IK feasibility: {ik_stats["kept"]}/{ik_stats["checked"]} '
                     f'reachable  elapsed={ik_dt:.2f}s')
             if not candidates:
@@ -817,7 +918,7 @@ class GraspGenNode(Node):
 
         best_q = candidates[0]['quality'] if candidates else 0.0
         total_dt = time.monotonic() - t0
-        self.get_logger().info(
+        self.get_logger().debug(
             f'[PROFILE][graspgen] total={total_dt:.3f}s extract_cloud={dt_extract:.3f}s '
             f'pca={dt_pca:.3f}s zmq={dt_zmq:.3f}s workspace={dt_workspace:.3f}s '
             f'quality={dt_quality:.3f}s build_candidates={dt_build:.3f}s '

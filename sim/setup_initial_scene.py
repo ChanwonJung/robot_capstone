@@ -43,30 +43,97 @@ BASKET_ASSET = IMPORTED_ASSETS_DIR / "Basket.usd"
 GLASS_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "P_Glassware_Short.usd"
 BEDSIDE_TABLE_POSITION = np.array([3.3, -1.79, -0.73])
 BEDSIDE_TABLE_ROTATION_DEG = np.array([0.0, 0.0, 25.0])
-APPLE_TRANSLATE = np.array([-2.43, 3.18, 0.682])   # 0.7배 축소 후 바닥 보정 (원래 0.66)
+# xy: panda_link0 기준 0.660m 에 오도록 옮겼다. 원래 자리는 0.747m 로, pick 이
+#   검증된 책(0.624m)·유리컵(0.654m) 대역 밖이었다. Panda 최대 도달은 0.855m 지만
+#   그건 팔을 수평으로 뻗었을 때고, top-down 파지는 손목이 물체 위 + pre-grasp
+#   가 거기서 또 120mm 위라 실제 작업영역은 훨씬 좁다. 구 파지 자체를 시험하는데
+#   도달 한계까지 겹치면 실패 원인이 안 갈린다.
+# z: 콜라이더 구(반지름 77.5*scale)의 바닥이 상판 면(-0.00137)에 닿는 값.
+#   이전 0.682 는 콜라이더가 z=[-101, +8]mm 로 거의 전부 테이블 아래에 있었다.
+APPLE_TRANSLATE = np.array([-2.4938, 3.0971, 0.761911])
 APPLE_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
-APPLE_VISUAL_TRANSLATE = np.array([-4.691566, -83.639191, 65.429489])
+# ★ 비주얼 정렬 — 이전 값 [-4.691566, -83.639191, 65.429489] 은 에셋 bbox 중심의
+# 단순 음수라 회전(90°X)을 반영하지 않았고, 그 결과 사과 비주얼이 콜라이더보다
+# 54.8mm 위에 떠 보였다(육안 확인 + 오프라인 bbox 측정 일치). 축 순서가
+# set_xform 의 op 순서([translate, orient, scale, rotateXYZ] — 참조 에셋이 이미
+# 가진 op 를 재사용해서 이렇게 된다)에 얽혀 있어 손계산이 아니라 야코비안으로
+# 역산했다. 조건: 비주얼 bbox 중심 XY == 콜라이더 XY, 비주얼 바닥 == 콜라이더 바닥.
+#   z=-75.65 = -(77.5 - 1.85) = -(콜라이더 반지름 - 콜라이더 오프셋)
+APPLE_VISUAL_TRANSLATE = np.array([-4.691567, -65.429491, -75.650001])
 APPLE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 1.85])
-GLASS_TRANSLATE = np.array([-2.23, 3.03, 0.733])   # 0.7배 축소 후 바닥 보정 (원래 0.71)
+# z 는 컵 바닥이 테이블 상판 면에 정확히 닿도록 측정으로 맞춘 값 (0.71 → 0.733 → 0.72863).
+# 부모 TabletopItems 가 z=-0.730 이므로 월드 z = 0.72863-0.730 = -0.00137.
+# 유리컵은 콜라이더 바닥 == 비주얼 바닥 == root 원점이다 — GLASS_COLLIDER_TRANSLATE(4.5)
+# 가 원통 반높이(9.0/2)를 정확히 상쇄하므로, root z 를 상판 면에 맞추면 그대로 안착한다.
+#
+# 상판 면 = -0.00137. table_low 메쉬에서 컵 XY 를 덮는 삼각형을 직접 찾아 잰 값이다
+# (윗면 -0.00137 / 아랫면 -0.07122, 두께 70mm). 상판이 큰 면 몇 장짜리 성긴 메쉬라
+# 컵 주변 35cm 안에 정점이 1개뿐 — 정점 최댓값(+0.01041)이나 bbox 로는 못 잰다.
+# 주의: PhysX 레이캐스트는 여기서 +0.01526 을 준다(비주얼보다 16.6mm 위). 충돌면과
+# 비주얼면이 어긋나 있으니, 이 값을 상판으로 쓰면 컵이 눈에 띄게 뜬다.
+GLASS_TRANSLATE = np.array([-2.23, 3.03, 0.72863])
 GLASS_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 GLASS_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 4.5])
-RED_BALL_TRANSLATE = np.array([-1.85, 2.97, 0.84])   # 0.7배 축소 후 바닥 보정 (원래 0.88)
+# xy: panda_link0 기준 0.650m 로 옮겼다 — 원래 자리는 0.844m 로 최대 도달
+#   0.855m 의 경계였다 (APPLE_TRANSLATE 주석 참조).
+# z: 콜라이더 구(반지름 1.93*scale)의 바닥이 상판 면(-0.00137)에 닿는 값.
+#   이전 0.84 는 콜라이더 바닥이 +43mm 라 공이 눈에 띄게 떠 있었다.
+RED_BALL_TRANSLATE = np.array([-2.3367, 3.0647, 0.762686])
 RED_BALL_ROTATION_DEG = np.array([-90.0, 0.0, 0.0])
-RED_BALL_VISUAL_TRANSLATE = np.array([2.981419, -1.258126, -0.150547])
+# ★ 비주얼 정렬 — APPLE_VISUAL_TRANSLATE 와 같은 회전 미반영 버그. 이전 값
+# [2.981419, -1.258126, -0.150547] 로는 공 비주얼이 콜라이더보다 22.4mm 아래로
+# 내려가 테이블에 파묻혀 보였다. Y 도 17.4mm 어긋나 있었다 — 카메라는 비주얼을
+# 보고 그리퍼는 콜라이더에 닿으므로 파지 정확도에 직접 영향이다.
+RED_BALL_VISUAL_TRANSLATE = np.array([2.981419, -0.150547, 1.274956])
 RED_BALL_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.02])
 BOOK_TRANSLATE = np.array([-2.11, 2.92, 0.787])   # 0.7배 축소 후 바닥 보정 (원래 0.80)
 BOOK_ROTATION_DEG = np.array([0.0, -90.0, -68.0])
 BOOK_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
-BASKET_TRANSLATE = np.array([-2.05, 2.30, 0.72])
+# 이전 위치 [-2.05, 2.30, 0.72] 는 panda_link0 기준 (0.068, -0.470) 으로, EE
+# 카메라 광축과의 내적이 음수 — 즉 **카메라 뒤쪽**이라 EE view 에 아예 안 잡혔다.
+# destination 을 EE 시야 가장자리에 걸치도록 로봇 앞으로 495mm 당겼다.
+#   link0 (0.480, -0.420), 베이스에서 0.638m — 검증된 도달 대역(책 0.624 /
+#   컵 0.654) 한복판이고, 책과 171mm 떨어져 있다 (바구니 모서리 기준).
+#
+# 역할 분담 (destination grounding):
+#   top view — 8/8 꼭짓점이 화면 안, 111x113px 로 잡힌다. 실제 추론은 여기서.
+#   EE view  — 먼 쪽 윗 모서리 2개만 v=370 부근에 걸린다 = "조금만 보이는" 상태.
+#              물체들이 v=377~415 라 같은 대역이다.
+# EE 근거리 한계: 카메라가 x=0.442 에서 앞아래를 보므로 테이블 바닥면이 화면에
+#   들어오는 최근접은 x≈0.52 다. 바구니는 높이가 131mm 라 x=0.48 에서도 윗
+#   모서리가 살아남는다 — 점이 아니라 상자로 계산해야 나오는 값이다.
+# z(local 0.72) 는 그대로 — link0 z = 0.72-0.73 = -0.010 으로 이전과 동일.
+BASKET_TRANSLATE = np.array([-1.9213, 2.6944, 0.72])
+# yaw 는 원래 값(-25) 로 되돌렸다. 부모 테이블이 +25 회전이라 -25 가 이를 상쇄해
+# 바구니가 월드 축에 정렬된다. **yaw 로는 가로/세로를 못 바꾼다** — 에셋 발자국이
+# 235x213mm 로 사실상 정사각이라 90도 돌려도 눈에 띄는 차이가 없다 (실측 확인).
+# 가로를 길게 하려면 아래 SCALE 을 비균일로 줘야 한다.
 BASKET_ROTATION_DEG = np.array([90.0, 0.0, -25.0])
-BASKET_SCALE = np.array([0.17, 0.17, 0.17])
+# 0.17 → 0.12. 에셋 원본 bbox = X 1.960 / Y 1.093(위) / Z 1.771 이므로
+#   scale 0.12 -> 가로 235 x 세로 213 x 높이 131 mm.
+# 피벗은 바닥이다 (에셋 Y_min=0.037 ≈ 0) — 축소해도 상판 접지가 안 틀어진다.
+BASKET_SCALE = np.array([0.12, 0.12, 0.12])
 # 테이블 위 파지 대상(사과·유리컵·빨간공·책) 전체 축소 배율. 콜라이더·오프셋이
 # 모두 *_SCALE 에서 파생되므로 이 배율 하나로 비주얼+물리가 함께 축소됨.
 # 1.0 = 원래 크기. 바구니(BASKET)는 목적지라 제외.
 _TABLETOP_SCALE = 0.7
-APPLE_SCALE = np.array([0.001, 0.001, 0.001]) * _TABLETOP_SCALE
-GLASS_SCALE = np.array([0.02, 0.02, 0.02]) * _TABLETOP_SCALE
-RED_BALL_SCALE = np.array([0.05, 0.05, 0.05]) * _TABLETOP_SCALE
+# 원본 에셋 154.57 x 167.28 x 151.29 units (콜라이더 반지름 77.5 는 X 반경 77.28 과 일치).
+# 0.001 에서는 지름 108.5mm 로 그리퍼 개폐 80mm 를 넘어 감싸 쥘 수 없었다.
+# 유리컵과 같은 68mm 로 맞춘다 — 실제 사과 크기이고 여유 11.8mm 로 검증된 값이다.
+#   가로 68.0mm (콜라이더 68.2mm) / 세로 73.6mm — 세로가 긴 건 줄기 때문.
+APPLE_SCALE = np.array([0.00062848, 0.00062848, 0.00062848]) * _TABLETOP_SCALE
+# 원본 에셋은 150.2mm 지름 x 133.4mm 높이 — 컵이 아니라 넓적한 사발 비율이고,
+# panda 최대 개폐(80mm)보다 커서 바깥에서 감싸 쥘 수 없었다. (림 파지만 남는데
+# 그건 복원 결과에 '빈 속'이 필요하고, SwinDRNet 은 꽉 찬 덩어리를 내놓는다.)
+#
+# xy 와 z 를 다르게 준다 — 균등 축소로는 사발 비율이 그대로라 '작은 사발'이 된다.
+#   xy 0.00906 → 지름  68mm  (실제 유리컵 6~7cm, 그리퍼 80mm 안쪽)
+#   z  0.01499 → 높이 100mm  (실제 유리컵 9.5~11cm)
+GLASS_SCALE = np.array([0.00906, 0.00906, 0.01499]) * _TABLETOP_SCALE
+# 원본 에셋 3.8137 x 3.8537 x 3.8137 units (콜라이더 반지름 1.93 은 비주얼 1.907 과 일치).
+# 0.05 에서는 지름 133.5mm(콜라이더 135.1mm)로 그리퍼 개폐 80mm 를 훨씬 넘었다.
+# 유리컵과 같은 68mm — 테니스공(67mm) 크기, 여유 11.2mm.
+RED_BALL_SCALE = np.array([0.02547213, 0.02547213, 0.02547213]) * _TABLETOP_SCALE
 BOOK_SCALE = np.array([0.10, 0.10, 0.10]) * _TABLETOP_SCALE
 # 책 무게 — 평행 그리퍼 grasp 유지를 쉽게 하려고 실제(~0.35kg)보다 가볍게.
 # 마찰력 F = μ·N 이라 무게가 가벼우면 적은 grip force 로도 안 미끄러짐.
@@ -685,6 +752,34 @@ def find_franka_root(stage):
     return None
 
 
+# ── Table collision approximation ─────────────────────────────────────────────
+# simple_room.usd 의 상판(table_low) 은 physics:approximation = convexDecomposition
+# 으로 저작돼 있다. VHACD 계열 볼록 분해는 메쉬를 복셀화해 볼록 덩어리(최대 64개)
+# 로 근사하므로 hull 이 원본 표면보다 위로 부푼다. 실측 결과 컵 자리에서
+#   비주얼 상판 = -0.00137   /   충돌 표면 = +0.01526   → 16.6mm 어긋남
+# 이 때문에 상판에 정확히 올려둔 물체가 충돌 형상 안에 파묻힌 채로 시작하고,
+# 그리퍼가 건드려 깨우는 순간 PhysX 가 침투를 해소하며 물체를 위로 튕겼다("뿅").
+#
+# 볼록 분해는 *동적* 강체에만 필요한 제약이다. 테이블은 정적이라 삼각형 메쉬
+# 충돌을 그대로 쓸 수 있고 그게 정확하다. 에셋에 physxCookedData:triangleMesh
+# 가 이미 구워져 있어(195KB) 쿠킹 비용도 추가로 들지 않는다.
+TABLE_COLLIDER_PATH = "/background/table_low_327/table_low"
+
+
+def fix_table_collision(stage):
+    """상판 콜라이더를 볼록 분해 → 정확 삼각형 메쉬로 교체."""
+    prim = stage.GetPrimAtPath(TABLE_COLLIDER_PATH)
+    if not prim or not prim.IsValid():
+        print(f"[table-collision] {TABLE_COLLIDER_PATH} 없음 — 건너뜀")
+        return
+    attr = prim.GetAttribute("physics:approximation")
+    if not attr:
+        attr = UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr()
+    before = attr.Get()
+    attr.Set("none")          # "none" = 근사 없음 = 원본 삼각형 메쉬
+    print(f"[table-collision] approximation {before} → none (정확 삼각형 메쉬)")
+
+
 # ── Gripper friction (panda fingers) ──────────────────────────────────────────
 # Isaac Sim default PhysX material friction (~0.5) is too low for reliable
 # top-down grasps of flat/thin objects (book). Boost static/dynamic friction
@@ -750,6 +845,73 @@ def _bind_physics_material(target_prim, material_prim):
         )
         bound_any = True
     return bound_any
+
+
+# ── Gripper drive strength (panda fingers) ────────────────────────────────────
+# Isaac 기본 Franka 에셋의 손가락 드라이브는 maxForce=7.2N / stiffness=400 이다.
+# 실제 Franka 그리퍼는 연속 70N 을 내므로 한참 약하다. 유리컵(Ø48mm 콜라이더)에서
+# 관측된 증상: CLOSE 시 손가락이 pos=0.0257m(폭 51.4mm)에서 멈춤 — 컵보다 3.2mm
+# 넓은 지점이다. 요구 힘 = stiffness × 오차 = 400 × 0.0257 = 10.3N 인데 maxForce
+# 7.2N 에서 잘려 더 조이지 못한 것. 정상력이 부족하니 μ=4 여도 마찰이 안 나오고,
+# 들어 올릴 때 컵이 미끄러져 빠졌다.
+#
+# stiffness 를 같이 올리는 이유: maxForce 만 올려도 400×0.0257=10.3N 이 상한이라
+# 큰 차이가 없다. 힘은 min(stiffness × 오차, maxForce) 로 결정된다.
+# damping 은 stiffness/damping 비(=5)를 원본과 동일하게 유지 — 솔버 진동 방지.
+#
+# ── maxForce 50 → 12 (2026-07-31) ────────────────────────────────────────────
+# 50N 은 과했다. gripper_action_server 는 CLOSE 목표를 0.0mm(완전 닫힘)로 주는데
+# 컵이 23.7mm 에서 막으므로 오차가 계속 남는다 → 요구력 5000×0.0237 = 118N 이
+# maxForce 로 잘려 **50N 이 파지 내내 걸린다**. 컵 무게는 1.8N 이다.
+#
+# 증상: pick 은 성공(pre_grasp/grasp/CLOSE 전부 SUCCESS, 23.70mm 접촉)하는데
+# retreat 에서 local planner 가 "stuck for several iterations" 로 abort. grasp
+# (아래로 120mm)와 retreat(위로 150mm)는 제약이 완전히 동일하고 컵을 쥐었는지만
+# 다르다 → 계획 문제가 아니라 팔이 물리적으로 못 올라가는 것. 정확 삼각형 메쉬로
+# 바꾼 상판(fix_table_collision)에 컵이 간격 0 으로 닿아 있어, 50N 으로 짓누르면
+# 컵이 메쉬에 박혀 팔이 못 든다는 가설.
+#
+# 12N 근거: 필요한 건 컵을 놓치지 않을 만큼이지 최대 악력이 아니다.
+# μ=4 이므로 마찰 = 12×4 = 48N, 컵 무게 1.8N 의 26배 여유. 원래 문제였던 기본값
+# 7.2N 보다는 67% 강해 조임 부족(51.4mm 정지)도 재발하지 않는다.
+FINGER_JOINT_NAMES = ("panda_finger_joint1", "panda_finger_joint2")
+GRIPPER_DRIVE_STIFFNESS = 5000.0
+GRIPPER_DRIVE_DAMPING   = 1000.0
+GRIPPER_DRIVE_MAX_FORCE = 12.0    # 50.0 → 12.0, 위 주석 참조
+
+
+def boost_gripper_drive(stage):
+    """손가락 프리즈매틱 조인트의 드라이브 강성/최대힘을 올린다."""
+    franka_root = find_franka_root(stage)
+    if franka_root is None:
+        print("[gripper-drive] Franka root not found — skipped")
+        return
+
+    touched = []
+    for prim in Usd.PrimRange(franka_root):
+        if prim.GetName() not in FINGER_JOINT_NAMES:
+            continue
+        max_force_attr = prim.GetAttribute("drive:linear:physics:maxForce")
+        if not max_force_attr:
+            # joint2 는 보통 mimic joint 라 자체 드라이브가 없다. joint1 만 조이면
+            # mimic 제약이 반대쪽을 따라오므로 건드리지 않는 게 맞다.
+            print(f"[gripper-drive] {prim.GetName()}: linear drive 없음 "
+                  f"(mimic joint 로 추정) — 건너뜀")
+            continue
+        stiff_attr = prim.GetAttribute("drive:linear:physics:stiffness")
+        damp_attr  = prim.GetAttribute("drive:linear:physics:damping")
+        before = (stiff_attr.Get(), damp_attr.Get(), max_force_attr.Get())
+        stiff_attr.Set(GRIPPER_DRIVE_STIFFNESS)
+        damp_attr.Set(GRIPPER_DRIVE_DAMPING)
+        max_force_attr.Set(GRIPPER_DRIVE_MAX_FORCE)
+        touched.append(f"{prim.GetName()} {before} → "
+                       f"({GRIPPER_DRIVE_STIFFNESS}, {GRIPPER_DRIVE_DAMPING}, "
+                       f"{GRIPPER_DRIVE_MAX_FORCE})")
+
+    if touched:
+        print("[gripper-drive] " + " | ".join(touched))
+    else:
+        print("[gripper-drive] 손가락 조인트를 찾지 못함 — 변경 없음")
 
 
 def apply_gripper_friction(stage):
@@ -1044,7 +1206,9 @@ def apply_scene():
     if table_prim and table_prim.IsValid():
         table_prim.SetActive(False)
     build_tabletop_items(stage, f"{additions_root.GetPath()}/TabletopItems")
+    fix_table_collision(stage)
     apply_gripper_friction(stage)
+    boost_gripper_drive(stage)
     # === Mode toggle ===
     # Capture mode  : `build_capture_humans` ON, `build_hazards` OFF
     # Hazard mode   : `build_capture_humans` OFF, `build_hazards` ON (default flight scenario)
