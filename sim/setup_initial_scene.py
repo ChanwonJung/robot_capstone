@@ -43,9 +43,23 @@ BASKET_ASSET = IMPORTED_ASSETS_DIR / "Basket.usd"
 GLASS_ASSET = XR_CONTENT_ROOT / "Assets" / "XR" / "Stages" / "Indoor" / "Modern_House" / "SubUSDs" / "P_Glassware_Short.usd"
 BEDSIDE_TABLE_POSITION = np.array([3.3, -1.79, -0.73])
 BEDSIDE_TABLE_ROTATION_DEG = np.array([0.0, 0.0, 25.0])
-APPLE_TRANSLATE = np.array([-2.43, 3.18, 0.682])   # 0.7배 축소 후 바닥 보정 (원래 0.66)
+# xy: panda_link0 기준 0.660m 에 오도록 옮겼다. 원래 자리는 0.747m 로, pick 이
+#   검증된 책(0.624m)·유리컵(0.654m) 대역 밖이었다. Panda 최대 도달은 0.855m 지만
+#   그건 팔을 수평으로 뻗었을 때고, top-down 파지는 손목이 물체 위 + pre-grasp
+#   가 거기서 또 120mm 위라 실제 작업영역은 훨씬 좁다. 구 파지 자체를 시험하는데
+#   도달 한계까지 겹치면 실패 원인이 안 갈린다.
+# z: 콜라이더 구(반지름 77.5*scale)의 바닥이 상판 면(-0.00137)에 닿는 값.
+#   이전 0.682 는 콜라이더가 z=[-101, +8]mm 로 거의 전부 테이블 아래에 있었다.
+APPLE_TRANSLATE = np.array([-2.4938, 3.0971, 0.761911])
 APPLE_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
-APPLE_VISUAL_TRANSLATE = np.array([-4.691566, -83.639191, 65.429489])
+# ★ 비주얼 정렬 — 이전 값 [-4.691566, -83.639191, 65.429489] 은 에셋 bbox 중심의
+# 단순 음수라 회전(90°X)을 반영하지 않았고, 그 결과 사과 비주얼이 콜라이더보다
+# 54.8mm 위에 떠 보였다(육안 확인 + 오프라인 bbox 측정 일치). 축 순서가
+# set_xform 의 op 순서([translate, orient, scale, rotateXYZ] — 참조 에셋이 이미
+# 가진 op 를 재사용해서 이렇게 된다)에 얽혀 있어 손계산이 아니라 야코비안으로
+# 역산했다. 조건: 비주얼 bbox 중심 XY == 콜라이더 XY, 비주얼 바닥 == 콜라이더 바닥.
+#   z=-75.65 = -(77.5 - 1.85) = -(콜라이더 반지름 - 콜라이더 오프셋)
+APPLE_VISUAL_TRANSLATE = np.array([-4.691567, -65.429491, -75.650001])
 APPLE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 1.85])
 # z 는 컵 바닥이 테이블 상판 면에 정확히 닿도록 측정으로 맞춘 값 (0.71 → 0.733 → 0.72863).
 # 부모 TabletopItems 가 z=-0.730 이므로 월드 z = 0.72863-0.730 = -0.00137.
@@ -60,21 +74,54 @@ APPLE_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 1.85])
 GLASS_TRANSLATE = np.array([-2.23, 3.03, 0.72863])
 GLASS_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 GLASS_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 4.5])
-RED_BALL_TRANSLATE = np.array([-1.85, 2.97, 0.84])   # 0.7배 축소 후 바닥 보정 (원래 0.88)
+# xy: panda_link0 기준 0.650m 로 옮겼다 — 원래 자리는 0.844m 로 최대 도달
+#   0.855m 의 경계였다 (APPLE_TRANSLATE 주석 참조).
+# z: 콜라이더 구(반지름 1.93*scale)의 바닥이 상판 면(-0.00137)에 닿는 값.
+#   이전 0.84 는 콜라이더 바닥이 +43mm 라 공이 눈에 띄게 떠 있었다.
+RED_BALL_TRANSLATE = np.array([-2.3367, 3.0647, 0.762686])
 RED_BALL_ROTATION_DEG = np.array([-90.0, 0.0, 0.0])
-RED_BALL_VISUAL_TRANSLATE = np.array([2.981419, -1.258126, -0.150547])
+# ★ 비주얼 정렬 — APPLE_VISUAL_TRANSLATE 와 같은 회전 미반영 버그. 이전 값
+# [2.981419, -1.258126, -0.150547] 로는 공 비주얼이 콜라이더보다 22.4mm 아래로
+# 내려가 테이블에 파묻혀 보였다. Y 도 17.4mm 어긋나 있었다 — 카메라는 비주얼을
+# 보고 그리퍼는 콜라이더에 닿으므로 파지 정확도에 직접 영향이다.
+RED_BALL_VISUAL_TRANSLATE = np.array([2.981419, -0.150547, 1.274956])
 RED_BALL_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.02])
 BOOK_TRANSLATE = np.array([-2.11, 2.92, 0.787])   # 0.7배 축소 후 바닥 보정 (원래 0.80)
 BOOK_ROTATION_DEG = np.array([0.0, -90.0, -68.0])
 BOOK_COLLIDER_TRANSLATE = np.array([0.0, 0.0, 0.0])
-BASKET_TRANSLATE = np.array([-2.05, 2.30, 0.72])
+# 이전 위치 [-2.05, 2.30, 0.72] 는 panda_link0 기준 (0.068, -0.470) 으로, EE
+# 카메라 광축과의 내적이 음수 — 즉 **카메라 뒤쪽**이라 EE view 에 아예 안 잡혔다.
+# destination 을 EE 시야 가장자리에 걸치도록 로봇 앞으로 495mm 당겼다.
+#   link0 (0.480, -0.420), 베이스에서 0.638m — 검증된 도달 대역(책 0.624 /
+#   컵 0.654) 한복판이고, 책과 171mm 떨어져 있다 (바구니 모서리 기준).
+#
+# 역할 분담 (destination grounding):
+#   top view — 8/8 꼭짓점이 화면 안, 111x113px 로 잡힌다. 실제 추론은 여기서.
+#   EE view  — 먼 쪽 윗 모서리 2개만 v=370 부근에 걸린다 = "조금만 보이는" 상태.
+#              물체들이 v=377~415 라 같은 대역이다.
+# EE 근거리 한계: 카메라가 x=0.442 에서 앞아래를 보므로 테이블 바닥면이 화면에
+#   들어오는 최근접은 x≈0.52 다. 바구니는 높이가 131mm 라 x=0.48 에서도 윗
+#   모서리가 살아남는다 — 점이 아니라 상자로 계산해야 나오는 값이다.
+# z(local 0.72) 는 그대로 — link0 z = 0.72-0.73 = -0.010 으로 이전과 동일.
+BASKET_TRANSLATE = np.array([-1.9213, 2.6944, 0.72])
+# yaw 는 원래 값(-25) 로 되돌렸다. 부모 테이블이 +25 회전이라 -25 가 이를 상쇄해
+# 바구니가 월드 축에 정렬된다. **yaw 로는 가로/세로를 못 바꾼다** — 에셋 발자국이
+# 235x213mm 로 사실상 정사각이라 90도 돌려도 눈에 띄는 차이가 없다 (실측 확인).
+# 가로를 길게 하려면 아래 SCALE 을 비균일로 줘야 한다.
 BASKET_ROTATION_DEG = np.array([90.0, 0.0, -25.0])
-BASKET_SCALE = np.array([0.17, 0.17, 0.17])
+# 0.17 → 0.12. 에셋 원본 bbox = X 1.960 / Y 1.093(위) / Z 1.771 이므로
+#   scale 0.12 -> 가로 235 x 세로 213 x 높이 131 mm.
+# 피벗은 바닥이다 (에셋 Y_min=0.037 ≈ 0) — 축소해도 상판 접지가 안 틀어진다.
+BASKET_SCALE = np.array([0.12, 0.12, 0.12])
 # 테이블 위 파지 대상(사과·유리컵·빨간공·책) 전체 축소 배율. 콜라이더·오프셋이
 # 모두 *_SCALE 에서 파생되므로 이 배율 하나로 비주얼+물리가 함께 축소됨.
 # 1.0 = 원래 크기. 바구니(BASKET)는 목적지라 제외.
 _TABLETOP_SCALE = 0.7
-APPLE_SCALE = np.array([0.001, 0.001, 0.001]) * _TABLETOP_SCALE
+# 원본 에셋 154.57 x 167.28 x 151.29 units (콜라이더 반지름 77.5 는 X 반경 77.28 과 일치).
+# 0.001 에서는 지름 108.5mm 로 그리퍼 개폐 80mm 를 넘어 감싸 쥘 수 없었다.
+# 유리컵과 같은 68mm 로 맞춘다 — 실제 사과 크기이고 여유 11.8mm 로 검증된 값이다.
+#   가로 68.0mm (콜라이더 68.2mm) / 세로 73.6mm — 세로가 긴 건 줄기 때문.
+APPLE_SCALE = np.array([0.00062848, 0.00062848, 0.00062848]) * _TABLETOP_SCALE
 # 원본 에셋은 150.2mm 지름 x 133.4mm 높이 — 컵이 아니라 넓적한 사발 비율이고,
 # panda 최대 개폐(80mm)보다 커서 바깥에서 감싸 쥘 수 없었다. (림 파지만 남는데
 # 그건 복원 결과에 '빈 속'이 필요하고, SwinDRNet 은 꽉 찬 덩어리를 내놓는다.)
@@ -83,7 +130,10 @@ APPLE_SCALE = np.array([0.001, 0.001, 0.001]) * _TABLETOP_SCALE
 #   xy 0.00906 → 지름  68mm  (실제 유리컵 6~7cm, 그리퍼 80mm 안쪽)
 #   z  0.01499 → 높이 100mm  (실제 유리컵 9.5~11cm)
 GLASS_SCALE = np.array([0.00906, 0.00906, 0.01499]) * _TABLETOP_SCALE
-RED_BALL_SCALE = np.array([0.05, 0.05, 0.05]) * _TABLETOP_SCALE
+# 원본 에셋 3.8137 x 3.8537 x 3.8137 units (콜라이더 반지름 1.93 은 비주얼 1.907 과 일치).
+# 0.05 에서는 지름 133.5mm(콜라이더 135.1mm)로 그리퍼 개폐 80mm 를 훨씬 넘었다.
+# 유리컵과 같은 68mm — 테니스공(67mm) 크기, 여유 11.2mm.
+RED_BALL_SCALE = np.array([0.02547213, 0.02547213, 0.02547213]) * _TABLETOP_SCALE
 BOOK_SCALE = np.array([0.10, 0.10, 0.10]) * _TABLETOP_SCALE
 # 책 무게 — 평행 그리퍼 grasp 유지를 쉽게 하려고 실제(~0.35kg)보다 가볍게.
 # 마찰력 F = μ·N 이라 무게가 가벼우면 적은 grip force 로도 안 미끄러짐.
