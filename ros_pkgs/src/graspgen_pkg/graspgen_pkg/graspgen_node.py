@@ -159,6 +159,17 @@ class GraspGenNode(Node):
         # wrist(panda_link8) 는 자동으로 fingertip + 0.103 위.
         p('force_top_down_grasp_z_frac',   0.65)
         p('force_top_down_grasp_z_offset', 0.0)
+        # force_top_down 일 때 XY 를 복원 cloud 의 어느 통계로 잡을지.
+        #   'median' — 점들의 중앙값. 점 밀도가 높은 쪽으로 끌린다.
+        #   'extent' — 실루엣 폭의 중점 (p2+p98)/2. 밀도와 무관.
+        # TARGET 포인트는 EE 카메라 한 시점에서만 나오므로 카메라를 향한 면에
+        # 점이 몰린다. 컵/책은 이 편향이 작지만 구에서는 median 이 눈에 띄게
+        # 밀려 손가락이 하강 중에 공을 쳐버렸다 (여유가 한쪽 5.6mm 뿐 —
+        # 그리퍼 개폐 80mm vs 공 지름 68.8mm). 한쪽 면만 찍혀도 실루엣의
+        # 좌우 끝은 양쪽 다 잡히므로 그 중점은 밀도에 안 흔들린다.
+        # min/max 가 아니라 2/98 퍼센타일인 건 아웃라이어 한두 점 때문.
+        # 기본값은 컵/책에서 검증된 median 을 유지 — 바꾸려면 명시적으로 켤 것.
+        p('grasp_xy_anchor', 'median')
         # ── Client-side grasp filters ────────────────────────────────────
         # The paper recommends publishing ~100 grasps as a goal set, but
         # our MoveIt + BT pipeline is single-goal sequential. We pre-filter
@@ -226,6 +237,12 @@ class GraspGenNode(Node):
         self._force_top_down = bool(g('force_top_down_orientation').value)
         self._ftd_grasp_z_frac = float(g('force_top_down_grasp_z_frac').value)
         self._ftd_grasp_z_off = float(g('force_top_down_grasp_z_offset').value)
+        self._xy_anchor     = str(g('grasp_xy_anchor').value).strip().lower()
+        if self._xy_anchor not in ('median', 'extent'):
+            self.get_logger().warn(
+                f"grasp_xy_anchor='{self._xy_anchor}' 는 알 수 없는 값 — "
+                "'median' 으로 되돌린다 (허용: median | extent)")
+            self._xy_anchor = 'median'
         self._td_enabled    = bool(g('top_down_filter_enabled').value)
         self._td_angle_deg  = float(g('top_down_angle_deg').value)
         self._ik_enabled    = bool(g('ik_filter_enabled').value)
@@ -757,19 +774,42 @@ class GraspGenNode(Node):
                 # XY 도 복원 cloud 중심(robust median)으로 센터링. GraspGen 원본
                 # XY 는 컵에서 최대 ~8cm 벗어나 있어 수직 grasp 이 옆으로 빗나감.
                 # projector bbox 대신 복원 cloud 를 쓰는 이유는 Z 앵커와 동일.
-                cx_r = float(np.median(pw[:, 0]))
-                cy_r = float(np.median(pw[:, 1]))
+                # 'extent' 는 실루엣 폭의 중점이라 점 밀도 편향에 안 끌린다
+                # (grasp_xy_anchor 선언부 주석 참조).
+                if self._xy_anchor == 'extent':
+                    xlo, xhi = np.percentile(pw[:, 0], (2.0, 98.0))
+                    ylo, yhi = np.percentile(pw[:, 1], (2.0, 98.0))
+                    cx_r = float((xlo + xhi) * 0.5)
+                    cy_r = float((ylo + yhi) * 0.5)
+                else:
+                    cx_r = float(np.median(pw[:, 0]))
+                    cy_r = float(np.median(pw[:, 1]))
                 for c in candidates:
                     c['quaternion']  = quat_td
                     c['position'][0] = cx_r
                     c['position'][1] = cy_r
                     c['position'][2] = wrist_z
+                # 두 앵커를 항상 같이 찍는다 — 한 번 돌리면 편향(Δ)이 바로
+                # 측정된다. 여유가 한쪽 5.6mm 라 이 값이 성패를 가른다.
+                mx = float(np.median(pw[:, 0]))
+                my = float(np.median(pw[:, 1]))
+                ex = float(np.percentile(pw[:, 0], 2.0)
+                           + np.percentile(pw[:, 0], 98.0)) * 0.5
+                ey = float(np.percentile(pw[:, 1], 2.0)
+                           + np.percentile(pw[:, 1], 98.0)) * 0.5
                 self.get_logger().info(
                     f'force_top_down: 수직 grasp | cloud z=[{z_bot:.3f},{z_top:.3f}] '
                     f'frac={self._ftd_grasp_z_frac:.2f} off={self._ftd_grasp_z_off:+.3f} '
                     f'→ XY=({cx_r:.3f},{cy_r:.3f}) fingertip_z={fingertip_z:.3f} '
                     f'wrist_z={wrist_z:.3f} (+X=({x_axis[0]:+.2f},{x_axis[1]:+.2f})) '
                     f'× {len(candidates)}')
+                self.get_logger().info(
+                    f'  xy_anchor={self._xy_anchor} | '
+                    f'median=({mx:.3f},{my:.3f}) extent=({ex:.3f},{ey:.3f}) '
+                    f'Δ=({(ex-mx)*1000:+.1f},{(ey-my)*1000:+.1f})mm | '
+                    f'cloud n={len(pw)} '
+                    f'xy_span=({(np.percentile(pw[:,0],98)-np.percentile(pw[:,0],2))*1000:.1f},'
+                    f'{(np.percentile(pw[:,1],98)-np.percentile(pw[:,1],2))*1000:.1f})mm')
             except (KeyError, IndexError, TypeError, ValueError) as e:
                 self.get_logger().warn(f'force_top_down skipped: {e}')
 

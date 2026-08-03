@@ -107,10 +107,11 @@ def generate_launch_description() -> LaunchDescription:
         # ── force top-down / grasp Z tuning ───────────────────────────
         DeclareLaunchArgument(
             'force_top_down_orientation',
-            default_value='false',
+            default_value='true',
             description='Replace GraspGen orientation with a clean vertical '
                         'top-down grasp (finger spread = PCA short axis). '
-                        'Recommended for the transparent cup / flat objects.',
+                        'Verified on the glass cup and the book; turn off to '
+                        'use GraspGen orientations as-is.',
         ),
         DeclareLaunchArgument(
             'force_top_down_grasp_z_frac',
@@ -122,6 +123,14 @@ def generate_launch_description() -> LaunchDescription:
             'force_top_down_grasp_z_offset',
             default_value='0.0',
             description='Extra +/- metres on top of the z_frac fingertip height.',
+        ),
+        DeclareLaunchArgument(
+            'grasp_xy_anchor',
+            default_value='median',
+            description="force_top_down 의 XY 앵커. 'median'=복원 cloud 중앙값"
+                        "(점 밀도가 높은 쪽으로 끌림), 'extent'=실루엣 폭의 중점"
+                        '(p2+p98)/2 로 밀도와 무관. 구처럼 한쪽 면만 찍히는 '
+                        '물체에서 median 이 밀리면 extent 로.',
         ),
         DeclareLaunchArgument(
             'override_xy_with_bbox_center',
@@ -161,8 +170,14 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             'transparent_reconstruct_enabled',
-            default_value='false',
-            description='투명물체(유리컵) see-through depth 를 원통 복원',
+            default_value='true',
+            description=(
+                '투명 TARGET 의 see-through depth 를 복원. 켜두고 쓰는 게 정상이다 — '
+                'transparent_force 가 false 인 한 graspgen_node 의 '
+                '_is_transparent_target() 이 TARGET 라벨을 transparent_labels '
+                "(glass/cup/bottle/transparent/wine) 와 대조해서, 'red ball' 이나 "
+                "'book' 같은 불투명 대상에서는 복원 단계를 통째로 건너뛴다."
+            ),
         ),
         DeclareLaunchArgument(
             'transparent_force',
@@ -177,8 +192,12 @@ def generate_launch_description() -> LaunchDescription:
         # ── SwinDRNet (Stage 2) ─────────────────────────────────────────
         DeclareLaunchArgument(
             'swindrnet_enabled',
-            default_value='false',
-            description='Enable SwinDRNet depth restoration (A100 server required)',
+            default_value='true',
+            description=(
+                'SwinDRNet 깊이 복원 (A100 서버 + 5557 터널 필요). 투명 TARGET 으로 '
+                '판정됐을 때만 호출되므로 켜두어도 불투명 대상에는 비용이 없다. '
+                '서버가 없으면 analytic 원통 복원으로 폴백한다.'
+            ),
         ),
         DeclareLaunchArgument(
             'swindrnet_host',
@@ -226,6 +245,7 @@ def generate_launch_description() -> LaunchDescription:
                 'force_top_down_orientation':    LaunchConfiguration('force_top_down_orientation'),
                 'force_top_down_grasp_z_frac':   LaunchConfiguration('force_top_down_grasp_z_frac'),
                 'force_top_down_grasp_z_offset': LaunchConfiguration('force_top_down_grasp_z_offset'),
+                'grasp_xy_anchor':               LaunchConfiguration('grasp_xy_anchor'),
                 'override_xy_with_bbox_center':  LaunchConfiguration('override_xy_with_bbox_center'),
                 'extrinsics_config':LaunchConfiguration('extrinsics_config'),
                 'world_frame':      LaunchConfiguration('world_frame'),
