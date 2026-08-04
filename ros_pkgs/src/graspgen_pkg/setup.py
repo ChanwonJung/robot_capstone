@@ -16,6 +16,7 @@ setup(
         ]),
         ('share/' + package_name + '/config', [
             'config/graspgen_params.yaml',
+            'config/grasp_profiles.yaml',
         ]),
         ('share/' + package_name + '/rviz', [
             # grasp_demo.rviz was rescued from vgn_grasp_pkg when that package

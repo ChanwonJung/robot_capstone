@@ -1,0 +1,69 @@
+# grasp_profiles.yaml — per-object force_top_down tuning, selected at runtime
+# from the TARGET label the Slow Brain grounded.
+#
+# WHY THIS FILE EXISTS
+#   force_top_down_grasp_z_frac / _z_offset are the fingertip height along the
+#   restored TARGET cloud, and the right value depends on the object's shape:
+#   a sphere must be gripped below its equator or the pads ride up and it squirts
+#   out, while a cup must be gripped near the rim because its walls are the only
+#   thing there is to hold. One launch default cannot serve both, so these used
+#   to be typed on the command line for every run — and forgetting one silently
+#   reproduced a failure that looks like a perception bug.
+#
+#   Now graspgen_node matches the TARGET label against `match` below and applies
+#   the profile for that scan. Nothing else changes per object, so a plain
+#   `ros2 launch graspgen_pkg graspgen.launch.py` is enough for every target.
+#
+# MATCHING
+#   Case-insensitive substring match against the TARGET detection's text, the
+#   same way _is_transparent_target() matches transparent_labels. The VLM emits
+#   free-form labels ("red sphere", "red apple", "white cylinder"), so match on
+#   keywords rather than exact names. FIRST profile that matches wins — put the
+#   specific ones above the general ones.
+#
+#   The matched text includes BOTH names the Slow Brain carries: `label` (what
+#   the VLM sees — "white cylinder") and `target_label` (what the operator asked
+#   for — "glass cup"). Matching on the visual label alone missed the glass cup
+#   entirely, which also disabled its depth restoration.
+#
+#   No match -> `default`, which is the launch-argument value, unchanged.
+#
+# OVERRIDING
+#   An explicit launch argument does NOT win over a matched profile; set
+#   use_grasp_profiles:=false to go back to pure launch arguments. The node logs
+#   every substitution it makes, so a surprising grasp height is one grep away.
+
+profiles:
+  # Transparent, thin-walled, gripped at the rim. Same keyword set as
+  # transparent_labels so depth restoration and grasp height agree on what a
+  # cup is. z_frac 0.65 = upper body; verified on the 68x100 mm glass cup.
+  - name: transparent_vessel
+    match: [glass, cup, mug, bottle, wine, transparent, tumbler]
+    z_frac: 0.65
+    z_offset: 0.0
+    xy_anchor: extent
+
+  # Apple: sphere-like but slightly squat, and the stem biases the cloud top.
+  # Verified 2026-08-03.
+  - name: apple
+    match: [apple]
+    z_frac: 0.45
+    z_offset: -0.020
+    xy_anchor: extent
+
+  # Spheres. The fingertips must sit BELOW the equator: the cloud only covers
+  # the camera-facing cap, so z_frac alone lands the pads above the widest point
+  # and the ball squeezes downward out of the jaws. Verified 2026-08-03 on the
+  # 68 mm red ball.
+  - name: sphere
+    match: [ball, sphere, orange, tomato]
+    z_frac: 0.45
+    z_offset: -0.025
+    xy_anchor: extent
+
+# Applied when nothing matches. Mirrors the launch defaults so an unknown object
+# behaves exactly as it did before this file existed.
+default:
+  z_frac: 0.65
+  z_offset: 0.0
+  xy_anchor: extent

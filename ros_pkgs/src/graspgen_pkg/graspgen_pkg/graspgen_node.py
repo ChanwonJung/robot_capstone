@@ -22,6 +22,8 @@ from typing import Optional
 
 import numpy as np
 import rclpy
+import yaml
+from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from scipy.spatial.transform import Rotation as Rot
@@ -37,6 +39,13 @@ _LATCHED_QOS = QoSProfile(
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
     reliability=QoSReliabilityPolicy.RELIABLE,
 )
+
+# 같은 프로파일을 Slow Brain 입력 구독에도 쓴다. 이게 없으면 발행자가
+# TRANSIENT_LOCAL 이어도 VOLATILE 구독자에게는 이력이 전달되지 않는다 —
+# QoS 는 호환되므로 경고 한 줄 없이, 이 노드보다 먼저 나간 스캔 결과를
+# 영원히 못 받는다. Slow Brain 은 명령당 1회만 도는데 graspgen 은 보통
+# 나중에 뜨므로, 이 비대칭이 곧 "GraspGen 이 조용히 아무것도 안 함" 이었다.
+_LATCHED_SUB_QOS = _LATCHED_QOS
 
 from .zmq_client import GraspGenClient, check_deps
 from .depth_utils import (decode_depth, decode_mask, extract_K,
@@ -170,6 +179,12 @@ class GraspGenNode(Node):
         # min/max 가 아니라 2/98 퍼센타일인 건 아웃라이어 한두 점 때문.
         # 기본값은 컵/책에서 검증된 median 을 유지 — 바꾸려면 명시적으로 켤 것.
         p('grasp_xy_anchor', 'median')
+        # ── Per-object grasp profiles ────────────────────────────────────
+        # z_frac / z_offset / xy_anchor 는 물체 모양에 따라 값이 다르다 (구는
+        # 적도 아래, 컵은 림 근처). 여태 launch 인자로 매번 넣던 것을 TARGET
+        # 라벨 기반으로 자동 선택한다. 표는 config/grasp_profiles.yaml.
+        p('use_grasp_profiles', True)
+        p('grasp_profiles_config', '')   # 빈 값 = 패키지 기본 config
         # ── Client-side grasp filters ────────────────────────────────────
         # The paper recommends publishing ~100 grasps as a goal set, but
         # our MoveIt + BT pipeline is single-goal sequential. We pre-filter
@@ -243,6 +258,14 @@ class GraspGenNode(Node):
                 f"grasp_xy_anchor='{self._xy_anchor}' 는 알 수 없는 값 — "
                 "'median' 으로 되돌린다 (허용: median | extent)")
             self._xy_anchor = 'median'
+        # launch 가 준 값을 그대로 보존한다. _apply_grasp_profile 이 매 스캔
+        # 여기서 다시 출발해야 대상이 바뀔 때 프로파일이 누적되지 않는다.
+        self._base_z_frac      = self._ftd_grasp_z_frac
+        self._base_z_off       = self._ftd_grasp_z_off
+        self._base_xy_anchor   = self._xy_anchor
+        self._use_profiles     = bool(g('use_grasp_profiles').value)
+        self._grasp_profiles   = self._load_grasp_profiles(
+            str(g('grasp_profiles_config').value))
         self._td_enabled    = bool(g('top_down_filter_enabled').value)
         self._td_angle_deg  = float(g('top_down_angle_deg').value)
         self._ik_enabled    = bool(g('ik_filter_enabled').value)
@@ -335,9 +358,10 @@ class GraspGenNode(Node):
         self.create_subscription(Image,      g('ee_depth_topic').value,           self._ee_depth_cb, 10)
         self.create_subscription(CameraInfo, g('ee_camera_info_topic').value,     self._ee_info_cb,  10)
         self.create_subscription(Image,      g('ee_camera_rgb_topic').value,      self._ee_rgb_cb,   10)
-        self.create_subscription(Image,      g('mask_topic').value,               self._mask_cb,     10)
-        self.create_subscription(String,     g('labeled_detections_topic').value, self._dets_cb,     10)
-        self.create_subscription(String,     g('world_map_result_topic').value,   self._result_cb,   10)
+        # Slow Brain 출력 3개는 latched — 구독도 TRANSIENT_LOCAL 이어야 이력이 온다.
+        self.create_subscription(Image,      g('mask_topic').value,               self._mask_cb,     _LATCHED_SUB_QOS)
+        self.create_subscription(String,     g('labeled_detections_topic').value, self._dets_cb,     _LATCHED_SUB_QOS)
+        self.create_subscription(String,     g('world_map_result_topic').value,   self._result_cb,   _LATCHED_SUB_QOS)
 
         # grasp_candidates 만 latched. markers/target_cloud 는 RViz 디버그용이라
         # VOLATILE 유지 (latching 시 stale 마커가 누적될 수 있음).
@@ -397,18 +421,97 @@ class GraspGenNode(Node):
         self._pending_result = None
         self._result_cb(msg)
 
+    def _load_grasp_profiles(self, path: str) -> list:
+        """config/grasp_profiles.yaml 을 읽어 프로파일 리스트를 돌려준다.
+
+        읽기 실패는 치명적이지 않다 — launch 값으로 계속 돈다. 다만 조용히
+        넘어가면 "왜 프로파일이 안 먹지"를 몇 시간 헤매게 되므로 크게 찍는다.
+        """
+        if not self._use_profiles:
+            self.get_logger().info('use_grasp_profiles=false — launch 값만 사용')
+            return []
+        if not path:
+            path = os.path.join(
+                get_package_share_directory('graspgen_pkg'),
+                'config', 'grasp_profiles.yaml')
+        try:
+            with open(path) as f:
+                cfg = yaml.safe_load(f) or {}
+            profiles = cfg.get('profiles') or []
+            for prof in profiles:
+                prof['match'] = [str(k).lower() for k in prof.get('match', [])]
+            names = ', '.join(str(p.get('name', '?')) for p in profiles)
+            self.get_logger().info(
+                f'grasp profiles ({len(profiles)}) from {path}: {names}')
+            return profiles
+        except Exception as e:  # noqa: BLE001 — 파지는 계속 가능해야 한다
+            self.get_logger().error(
+                f'grasp_profiles 로드 실패 ({path}): {e} — launch 값으로 진행. '
+                '물체별 z_frac/z_offset 은 인자로 직접 넣어야 한다.')
+            return []
+
+    def _target_text(self) -> str:
+        """TARGET detection 의 모든 값을 합친 소문자 문자열 (키워드 매칭용).
+
+        VLM 라벨은 자유 문자열이라 ('red sphere', 'white cylinder') 정확 일치가
+        아니라 키워드 부분일치로 본다. TARGET 이 없으면 빈 문자열.
+        """
+        for det in (self._labeled_dets or []):
+            if str(det.get('category', '')).upper() == 'TARGET':
+                return ' '.join(str(v) for v in det.values()).lower()
+        return ''
+
     def _is_transparent_target(self) -> bool:
         """TARGET 이 투명물체인지 판정. force=true 면 항상 True(테스트용),
         아니면 TARGET detection 의 값 문자열에 transparent_labels 키워드 매칭."""
         if self._tr_force:
             return True
-        if not self._labeled_dets:
-            return False
-        for det in self._labeled_dets:
-            if str(det.get('category', '')).upper() == 'TARGET':
-                text = ' '.join(str(v) for v in det.values()).lower()
-                return any(k in text for k in self._tr_labels)
-        return False
+        text = self._target_text()
+        return bool(text) and any(k in text for k in self._tr_labels)
+
+    def _apply_grasp_profile(self) -> None:
+        """TARGET 라벨에 맞는 force_top_down 튜닝을 이번 스캔에 적용한다.
+
+        구는 적도 아래를 물어야 하고 컵은 림 근처를 물어야 해서, launch 기본값
+        하나로는 둘 다 못 맞춘다. 여태 매번 손으로 인자를 넣었고, 하나 빠뜨리면
+        인지 버그처럼 보이는 파지 실패로 재현됐다 — 그걸 라벨로 자동화한다.
+
+        _base_* 를 매번 기준으로 삼는다. 직전 스캔이 남긴 값에서 출발하면
+        대상이 바뀔 때 프로파일이 누적돼 엉뚱한 높이가 된다.
+        """
+        self._ftd_grasp_z_frac = self._base_z_frac
+        self._ftd_grasp_z_off = self._base_z_off
+        self._xy_anchor = self._base_xy_anchor
+
+        if not self._use_profiles or not self._grasp_profiles:
+            return
+
+        text = self._target_text()
+        if not text:
+            return
+
+        for prof in self._grasp_profiles:
+            if not any(k in text for k in prof.get('match', [])):
+                continue
+            self._ftd_grasp_z_frac = float(
+                prof.get('z_frac', self._base_z_frac))
+            self._ftd_grasp_z_off = float(
+                prof.get('z_offset', self._base_z_off))
+            self._xy_anchor = str(
+                prof.get('xy_anchor', self._base_xy_anchor)).strip().lower()
+            self.get_logger().info(
+                f"grasp profile '{prof.get('name', '?')}' matched TARGET "
+                f"→ z_frac={self._ftd_grasp_z_frac:.2f} "
+                f"z_offset={self._ftd_grasp_z_off:+.3f} "
+                f"xy_anchor={self._xy_anchor} "
+                f"(launch 값 {self._base_z_frac:.2f}/{self._base_z_off:+.3f}/"
+                f"{self._base_xy_anchor} 대체 — 끄려면 use_grasp_profiles:=false)")
+            return
+
+        self.get_logger().info(
+            f'매칭되는 grasp profile 없음 → launch 값 유지 '
+            f'z_frac={self._base_z_frac:.2f} z_offset={self._base_z_off:+.3f} '
+            f'xy_anchor={self._base_xy_anchor}')
 
     # ── main trigger ─────────────────────────────────────────────────────────
 
@@ -421,6 +524,10 @@ class GraspGenNode(Node):
             self._pending_result = msg.data
             self.get_logger().warn('EE 캐시 미도착 — 대기')
             return
+
+        # 대상이 바뀌면 파지 높이도 바뀐다. detections 가 캐시된 뒤, 실제 추론에
+        # 쓰이기 전에 이번 스캔의 TARGET 라벨로 프로파일을 고른다.
+        self._apply_grasp_profile()
 
         # [디버그] 원본 EE depth 범위 확인
         self.get_logger().debug(
