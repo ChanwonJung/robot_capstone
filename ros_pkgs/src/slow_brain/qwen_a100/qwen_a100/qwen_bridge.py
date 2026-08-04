@@ -6,15 +6,48 @@ qwen_schema.py.  Keep it that way — this file should stay boring.
 Subscribes
   /user_instruction            std_msgs/String    TRIGGER
   <image_topic>                sensor_msgs/Image  cached (latest frame wins)
+  <top_image_topic>            sensor_msgs/Image  cached — dual view, optional
   /bt/replan_request           std_msgs/Empty     re-TRIGGER with cached instruction
 
 Publishes
   /qwen/labeled_detections     std_msgs/String    JSON array, latched
   /qwen/grounding_result       std_msgs/String    JSON object, latched
   /qwen/source_image           sensor_msgs/Image  the exact frame the VLM saw, latched
+  /qwen/top/labeled_detections std_msgs/String    dual view only, latched
+  /qwen/top/source_image       sensor_msgs/Image  dual view only, latched
   /slow_brain/status           std_msgs/String    diagnostic state, latched
   /slow_brain/question         std_msgs/String    clarification request, latched
   /slow_brain/question_image   sensor_msgs/Image  numbered candidate boxes, latched
+
+DUAL VIEW — why, and how the two replies are merged.
+
+The wrist camera physically cannot see the destination in this workspace: its
+near limit on the table is x ~ 0.58 m in panda_link0 while the basket sits at
+x = 0.48, so only the basket's far wall clips into the bottom-right corner of
+the frame.  And mask_projection_pkg only labels the EE depth stream — the top
+camera contributes UNKNOWN geometry, never categories.  So a destination
+centroid could never exist on the single-view path, whatever the VLM replied.
+
+With top_image_topic set, this node grounds BOTH frames and splits the roles:
+
+  wrist  -> TARGET       (grasping needs the close-up geometry anyway)
+  top    -> DESTINATION  (a container opening reads best from straight above)
+
+Each call is restricted by a view hint, and keep_only() demotes anything the
+model emits outside its role.  That makes the split unambiguous instead of
+something to arbitrate: the two views can never both claim the same category, so
+build_result_json's "last write wins" collision can never fire.
+
+The two calls run CONCURRENTLY on one thread pool.  vLLM continuous-batches
+concurrent requests, so the added latency is max(t_wrist, t_top), not the sum.
+A failed overhead call is non-fatal — the wrist scan still publishes and the
+robot can pick and hold; only the place phase loses its pose.
+
+The overhead pair (/qwen/top/*) drives a SECOND sam_mask_node instance sized to
+the TOP depth image, which publishes /sam/top/mask_image for the projector's
+second labeled pass.  It is published only when the overhead view actually found
+a destination — an empty detections array would just make that SAM instance log
+"nothing to segment" on every scan.
 
 Three outcomes per scan, and only the first publishes a scene:
   ok          -> detections + grounding + source_image
@@ -50,6 +83,7 @@ the image is cached, because there is no detector upstream any more.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import shutil
@@ -65,8 +99,13 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Empty, String
 
-from .qwen_call import ground
-from .qwen_schema import build_labeled_detections, to_json
+from .qwen_call import ground, VIEW_HINT_OVERHEAD, VIEW_HINT_WRIST
+from .qwen_schema import (
+    build_labeled_detections,
+    GroundingResult,
+    keep_only,
+    to_json,
+)
 
 # bt_pkg subscribes /qwen/grounding_result with plain volatile QoS, and
 # mask_projection_pkg subscribes /qwen/labeled_detections the same way.  A
@@ -87,16 +126,22 @@ class QwenBridgeNode(Node):
         self.declare_parameter("vllm_endpoint_url", "http://localhost:8000/v1")
         self.declare_parameter("model_name", "qwen35-local")
         self.declare_parameter("image_topic", "/ee_camera/image_raw")
+        # Empty disables the dual-view path entirely and this node behaves
+        # exactly as before. Set it to the overhead RGB topic to enable.
+        self.declare_parameter("top_image_topic", "")
         # Test mode: when set, this file is used as THE frame and image_topic is
         # not subscribed at all. Lets the whole ROS path run without Isaac Sim.
         self.declare_parameter("image_path", "")
+        self.declare_parameter("top_image_path", "")
         self.declare_parameter("instruction", "")
-        self.declare_parameter("bbox_convention", "absolute")
+        self.declare_parameter("bbox_convention", "normalized_1000")
         self.declare_parameter("timeout_sec", 120.0)
         self.declare_parameter("max_tokens", 2048)
         self.declare_parameter("detections_topic", "/qwen/labeled_detections")
         self.declare_parameter("grounding_topic", "/qwen/grounding_result")
         self.declare_parameter("source_image_topic", "/qwen/source_image")
+        self.declare_parameter("top_detections_topic", "/qwen/top/labeled_detections")
+        self.declare_parameter("top_source_image_topic", "/qwen/top/source_image")
         self.declare_parameter("status_topic", "/slow_brain/status")
         self.declare_parameter("question_topic", "/slow_brain/question")
         self.declare_parameter("question_image_topic", "/slow_brain/question_image")
@@ -118,10 +163,15 @@ class QwenBridgeNode(Node):
         seed = self.get_parameter("instruction").value
         self._instruction: str | None = seed or None
         self._frame: Image | None = None
+        self._top_frame: Image | None = None
         self._lock = threading.Lock()
         self._busy = False
 
         self._bridge = CvBridge()
+        # Two workers: one per view. Both calls are in flight at the same time,
+        # so the overhead grounding is essentially free in wall-clock terms.
+        self._pool = ThreadPoolExecutor(max_workers=2,
+                                        thread_name_prefix="qwen_ground")
 
         self.create_subscription(
             String, "/user_instruction", self._instruction_cb, 10)
@@ -130,10 +180,20 @@ class QwenBridgeNode(Node):
 
         image_path = self.get_parameter("image_path").value
         if image_path:
-            self._load_static_frame(image_path)
+            self._frame = self._load_static_frame(image_path, "ee_camera_static")
         else:
             self.create_subscription(
                 Image, self.get_parameter("image_topic").value, self._image_cb, 1)
+
+        top_image_topic = self.get_parameter("top_image_topic").value
+        top_image_path = self.get_parameter("top_image_path").value
+        self._dual = bool(top_image_topic or top_image_path)
+        if top_image_path:
+            self._top_frame = self._load_static_frame(
+                top_image_path, "top_camera_static")
+        elif top_image_topic:
+            self.create_subscription(
+                Image, top_image_topic, self._top_image_cb, 1)
 
         self._det_pub = self.create_publisher(
             String, self.get_parameter("detections_topic").value, LATCHED)
@@ -141,6 +201,12 @@ class QwenBridgeNode(Node):
             String, self.get_parameter("grounding_topic").value, LATCHED)
         self._image_pub = self.create_publisher(
             Image, self.get_parameter("source_image_topic").value, LATCHED)
+        # Created unconditionally so `ros2 topic list` shows the contract even
+        # when the dual-view path is off; nothing is ever published on them then.
+        self._top_det_pub = self.create_publisher(
+            String, self.get_parameter("top_detections_topic").value, LATCHED)
+        self._top_image_pub = self.create_publisher(
+            Image, self.get_parameter("top_source_image_topic").value, LATCHED)
         # Observability only — never let anything gate on this. A failed scan is
         # otherwise invisible unless someone is watching this node's console.
         self._status_pub = self.create_publisher(
@@ -165,9 +231,12 @@ class QwenBridgeNode(Node):
 
         image_src = ("file:" + image_path if image_path
                      else self.get_parameter("image_topic").value)
+        top_src = ("file:" + top_image_path if top_image_path
+                   else top_image_topic or "<disabled>")
         self.get_logger().info(
             f"qwen_bridge ready — endpoint={self._endpoint} model={self._model} "
-            f"image={image_src}"
+            f"image={image_src} top_image={top_src} "
+            f"mode={'dual-view' if self._dual else 'single-view'}"
             + (f" seed_instruction={self._instruction!r}" if self._instruction else "")
         )
 
@@ -266,28 +335,32 @@ class QwenBridgeNode(Node):
 
     # ── static test frame ────────────────────────────────────────────────────
 
-    def _load_static_frame(self, path: str) -> None:
-        """Use a file on disk as the camera frame (offline testing)."""
+    def _load_static_frame(self, path: str, frame_id: str) -> Image:
+        """Use a file on disk as a camera frame (offline testing)."""
         image_bgr = cv2.imread(path)
         if image_bgr is None:
             raise RuntimeError(
-                f"image_path is set but the file could not be read: {path!r}")
+                f"image path is set but the file could not be read: {path!r}")
 
         msg = self._bridge.cv2_to_imgmsg(image_bgr, encoding="bgr8")
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "ee_camera_static"
-        self._frame = msg
+        msg.header.frame_id = frame_id
 
         h, w = image_bgr.shape[:2]
         self.get_logger().warn(
-            f"TEST MODE — using static image {path} ({w}x{h}); "
-            "image_topic is NOT subscribed")
+            f"TEST MODE — using static image {path} ({w}x{h}) as {frame_id}; "
+            "the matching image topic is NOT subscribed")
+        return msg
 
     # ── callbacks ────────────────────────────────────────────────────────────
 
     def _image_cb(self, msg: Image) -> None:
         with self._lock:
             self._frame = msg
+
+    def _top_image_cb(self, msg: Image) -> None:
+        with self._lock:
+            self._top_frame = msg
 
     def _instruction_cb(self, msg: String) -> None:
         text = msg.data.strip()
@@ -375,27 +448,67 @@ class QwenBridgeNode(Node):
                 self.get_logger().warn(
                     "no camera frame cached yet — is the EE image topic publishing?")
                 return
+            # Both frames are snapshotted together under the lock so the two
+            # views describe the same instant. A missing overhead frame degrades
+            # to single-view rather than blocking the pick.
+            top_frame = self._top_frame if self._dual else None
+            if self._dual and top_frame is None:
+                self.get_logger().warn(
+                    "dual view enabled but no overhead frame cached — grounding "
+                    "the wrist view only; the place phase will have no pose")
             self._busy = True
 
         threading.Thread(
-            target=self._run, args=(instruction, frame), daemon=True).start()
+            target=self._run, args=(instruction, frame, top_frame),
+            daemon=True).start()
 
-    def _run(self, instruction: str, frame: Image) -> None:
+    def _ground_one(self, image_bgr, instruction: str, view_hint: str):
+        """One VLM pass with this node's shared transport settings."""
+        return ground(
+            image_bgr,
+            instruction,
+            endpoint_url=self._endpoint,
+            model=self._model,
+            bbox_convention=self._bbox_convention,
+            timeout_sec=self._timeout,
+            max_tokens=self._max_tokens,
+            view_hint=view_hint,
+        )
+
+    def _run(self, instruction: str, frame: Image,
+             top_frame: Image | None = None) -> None:
         t0 = time.monotonic()
         self._scan_id += 1
         self._status("running", instruction=instruction)
         try:
             image_bgr = self._bridge.imgmsg_to_cv2(frame, desired_encoding="bgr8")
+            dual = top_frame is not None
 
-            objects, grounding, meta = ground(
-                image_bgr,
-                instruction,
-                endpoint_url=self._endpoint,
-                model=self._model,
-                bbox_convention=self._bbox_convention,
-                timeout_sec=self._timeout,
-                max_tokens=self._max_tokens,
-            )
+            # Submitted BEFORE the wrist call so both requests sit on the server
+            # at once. vLLM continuous-batches them, so the pair costs
+            # max(t_wrist, t_top) rather than the sum.
+            top_future = None
+            if dual:
+                top_bgr = self._bridge.imgmsg_to_cv2(
+                    top_frame, desired_encoding="bgr8")
+                top_future = self._pool.submit(
+                    self._ground_one, top_bgr, instruction, VIEW_HINT_OVERHEAD)
+
+            objects, grounding, meta = self._ground_one(
+                image_bgr, instruction, VIEW_HINT_WRIST if dual else "")
+
+            # Non-fatal by design: without a destination the robot can still
+            # pick and hold, and stalling the whole scan over a failed second
+            # call would be a worse trade.
+            top_objects: list = []
+            top_grounding = None
+            if top_future is not None:
+                try:
+                    top_objects, top_grounding, _ = top_future.result()
+                except Exception as exc:  # noqa: BLE001
+                    self.get_logger().error(
+                        f"overhead grounding failed: {exc} — publishing the "
+                        "wrist view only; the place phase will have no pose")
 
             # AMBIGUOUS: several objects match equally. Ask rather than guess —
             # publishing one of N arbitrary candidates is worse than stopping,
@@ -433,25 +546,61 @@ class QwenBridgeNode(Node):
             # target-less scene would stall the BT with no explanation, so fail
             # loudly and leave the previous latched scan in place.
             if not meta["has_target"]:
+                # An empty list here almost never means "the model saw nothing".
+                # It usually means every box was thrown away as degenerate, which
+                # is what a wrong bbox_convention looks like from the outside.
+                extra = ""
+                if meta.get("n_dropped_degenerate"):
+                    extra = (f" {meta['n_dropped_degenerate']}/{meta['n_raw']} boxes "
+                             f"were dropped as zero-area under bbox_convention="
+                             f"{self._bbox_convention!r} — fix that first.")
                 self.get_logger().error(
                     "no TARGET found — nothing to grasp. Not publishing. "
-                    f"Detected: {[d.label for d in objects]}")
+                    f"Detected: {[d.label for d in objects]}.{extra}")
                 self._status("failed", "no_target",
-                             detected=[d.label for d in objects])
+                             detected=[d.label for d in objects],
+                             n_dropped_degenerate=meta.get("n_dropped_degenerate", 0),
+                             bbox_convention=self._bbox_convention)
                 return
+
+            # ── merge the two views ──────────────────────────────────────────
+            # The roles are exclusive: wrist owns TARGET, overhead owns
+            # DESTINATION. keep_only enforces that even when the model ignores
+            # its view hint, so the two views can never write the same key in
+            # /world_map_result (where a collision would silently overwrite).
+            if dual:
+                objects = keep_only(objects, "TARGET")
+                top_objects = keep_only(top_objects, "DESTINATION")
+                top_has_dest = any(
+                    d.category == "DESTINATION" for d in top_objects)
+                destination = (top_grounding.destination
+                               if top_grounding is not None else None)
+            else:
+                top_has_dest = False
+                destination = grounding.destination
+
+            # Rebuilt rather than mutated: GroundingResult is a pydantic model
+            # and model_copy is v2-only (see qwen_schema's dual-major note).
+            grounding = GroundingResult(
+                target_label=grounding.target_label,
+                destination=destination,
+                confidence=grounding.confidence,
+            )
 
             # NON-FATAL: a pick-only instruction ("pick up the book") has no
             # destination by design, and a named-but-unsegmented destination is
             # recoverable too. Publish the target either way — the BT can pick
             # and hold. Only the place phase is unavailable.
-            if meta.get("pick_only"):
+            if destination is None:
                 self.get_logger().info(
-                    "pick-only instruction — no destination. Publishing target "
-                    "only; the place phase will be skipped.")
-            elif not meta["has_destination"]:
+                    "no destination — publishing target only; the place phase "
+                    "will be skipped.")
+            elif dual and not top_has_dest:
                 self.get_logger().warn(
-                    "destination named but not segmentable — publishing target "
-                    "only; the place phase will have no pose.")
+                    f"destination {destination.reference_label!r} described but "
+                    "not segmented in the overhead view — /world_map_result will "
+                    "carry NO destination centroid. bt_pkg must gate the place "
+                    "phase on the centroid, not on this spec.")
             if meta["warning"]:
                 self.get_logger().warn(meta["warning"])
 
@@ -461,29 +610,45 @@ class QwenBridgeNode(Node):
             # guarantee, so a consumer that triggers on the FIRST publish here
             # can fire before the later ones arrive. Cache detections, trigger
             # on the image.
-            self._det_pub.publish(
-                String(data=json.dumps(build_labeled_detections(objects))))
+            self._det_pub.publish(String(data=json.dumps(
+                build_labeled_detections(objects, grounding.target_label))))
+            # Only when the overhead view actually segmented something. An empty
+            # array would just make the second sam_mask_node log "nothing to
+            # segment" on every scan, and the projector would then wait out its
+            # top-mask timeout for no reason.
+            if top_has_dest:
+                self._top_det_pub.publish(
+                    String(data=json.dumps(build_labeled_detections(top_objects))))
             # exclude_none: a None destination must OMIT the key, not emit null.
             # bt_pkg does j.contains("destination") then .value() on it, which
             # would throw inside its parser on a null.
             self._grounding_pub.publish(
                 String(data=to_json(grounding, exclude_none=True)))
+            # Each view's source image is its own SAM instance's trigger, and
+            # must follow that view's detections. The wrist image goes last
+            # because it is what the projector ultimately fires on.
+            if top_has_dest:
+                self._top_image_pub.publish(top_frame)
             self._image_pub.publish(frame)
 
             dest = grounding.destination
             dest_desc = (
                 f"dest={dest.reference_label!r} type={dest.type} "
-                f"relation={dest.relation or '-'} region={dest.region or '-'}"
+                f"relation={dest.relation or '-'} region={dest.region or '-'} "
+                f"segmented={top_has_dest if dual else 'n/a'}"
                 if dest is not None else "dest=<none, pick-only>")
             self.get_logger().info(
-                f"grounded in {time.monotonic() - t0:.1f}s — "
+                f"grounded in {time.monotonic() - t0:.1f}s "
+                f"({'dual' if dual else 'single'}-view) — "
                 f"{meta['n_objects']} objects, "
                 f"target={grounding.target_label!r} {dest_desc}")
             self._status(
                 "ok",
                 target=grounding.target_label,
                 destination=(dest.reference_label if dest else None),
-                pick_only=bool(meta.get("pick_only")),
+                destination_segmented=bool(top_has_dest),
+                dual_view=dual,
+                pick_only=dest is None,
                 n_objects=meta["n_objects"],
                 confidence=grounding.confidence,
                 latency_s=round(time.monotonic() - t0, 2),
@@ -505,6 +670,9 @@ def main(args=None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        # ThreadPoolExecutor workers are non-daemon, so without this a Ctrl-C
+        # during a 120 s VLM timeout would block shutdown until the call returns.
+        node._pool.shutdown(wait=False, cancel_futures=True)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

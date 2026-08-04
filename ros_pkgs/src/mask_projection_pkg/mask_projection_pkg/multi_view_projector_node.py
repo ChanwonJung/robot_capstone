@@ -25,7 +25,7 @@ _LATCHED_QOS = QoSProfile(
 )
 
 from .cloud_builder import build_pointcloud2
-from .label_mapper import CategoryPoints
+from .label_mapper import CATEGORY_FREE, CategoryPoints
 from .ply_utils import build_result_json, save_ply_labeled
 from .projection_engine import (
     collect_seg_points,
@@ -71,6 +71,21 @@ class MultiViewProjectorNode(Node):
         self.declare_parameter('ee_camera_info_topic',   '/ee_camera/camera_info')
         self.declare_parameter('mask_topic',             '/grounded_sam/mask_image')
         self.declare_parameter('detections_topic',       '/grounded_sam/detections_json')
+        # ── Top-view labeled pass (dual-view Slow Brain) ─────────────────────
+        # Empty disables it and the node behaves exactly as before: the EE mask
+        # supplies every category and the top camera contributes only UNKNOWN
+        # geometry.  Set both to run a SECOND project_labeled pass over the top
+        # depth image, which is the only way a DESTINATION centroid can exist —
+        # the wrist camera cannot see the basket at all (its near limit on the
+        # table is x ~ 0.58 m in panda_link0; the basket sits at x = 0.48).
+        self.declare_parameter('top_mask_topic',         '')
+        self.declare_parameter('top_detections_topic',   '')
+        # How long to wait for the top mask after the EE mask arrives before
+        # publishing without it.  The two masks come from independent SAM
+        # instances with no shared scan id, so pairing is by arrival window.
+        # Publishing EE-only on expiry keeps a failed overhead pass from
+        # stalling the pick.
+        self.declare_parameter('top_mask_timeout_sec',   8.0)
         self.declare_parameter('output_cloud_topic',     '/world_map')
         self.declare_parameter('output_result_topic',    '/world_map_result')
         self.declare_parameter('output_raw_cloud_topic', '/world_cloud_raw')
@@ -98,6 +113,9 @@ class MultiViewProjectorNode(Node):
         ee_camera_info_topic   = self.get_parameter('ee_camera_info_topic').value
         mask_topic             = self.get_parameter('mask_topic').value
         detections_topic       = self.get_parameter('detections_topic').value
+        top_mask_topic         = self.get_parameter('top_mask_topic').value
+        top_detections_topic   = self.get_parameter('top_detections_topic').value
+        self._top_mask_timeout = float(self.get_parameter('top_mask_timeout_sec').value)
         output_cloud_topic     = self.get_parameter('output_cloud_topic').value
         output_result_topic    = self.get_parameter('output_result_topic').value
         output_raw_cloud_topic = self.get_parameter('output_raw_cloud_topic').value
@@ -140,6 +158,14 @@ class MultiViewProjectorNode(Node):
         # GSAM outputs
         self._latest_detections: Optional[List[Dict]] = None
 
+        # Top-view labeled pass. Enabled only when BOTH topics are configured —
+        # a mask without its detections cannot be joined to a category.
+        self._top_labeled_enabled = bool(top_mask_topic and top_detections_topic)
+        self._top_mask:            Optional[Image]      = None
+        self._top_detections:      Optional[List[Dict]] = None
+        self._pending_ee_mask:     Optional[Image]      = None
+        self._top_wait_timer                            = None
+
         # ── subscribers ───────────────────────────────────────────────────────
         self.create_subscription(Image,      top_depth_topic,       self._top_depth_cb,  10)
         self.create_subscription(CameraInfo, top_camera_info_topic, self._top_info_cb,   10)
@@ -147,6 +173,11 @@ class MultiViewProjectorNode(Node):
         self.create_subscription(CameraInfo, ee_camera_info_topic,  self._ee_info_cb,    10)
         self.create_subscription(String,     detections_topic,      self._json_cb,       10)
         self.create_subscription(Image,      mask_topic,            self._mask_cb,       10)
+        if self._top_labeled_enabled:
+            self.create_subscription(
+                String, top_detections_topic, self._top_json_cb, 10)
+            self.create_subscription(
+                Image,  top_mask_topic,       self._top_mask_cb, 10)
 
         # ── publishers ────────────────────────────────────────────────────────
         self._pub_cloud     = self.create_publisher(PointCloud2, output_cloud_topic,     10)
@@ -160,7 +191,10 @@ class MultiViewProjectorNode(Node):
             f'MultiViewProjectorNode ready — '
             f'depth=[{self._min_depth}, {self._max_depth}]m  '
             f'trigger={mask_topic}  '
-            f'extrinsics={extrinsics_path}'
+            + (f'top_labeled={top_mask_topic} (timeout '
+               f'{self._top_mask_timeout:.1f}s)  '
+               if self._top_labeled_enabled else 'top_labeled=off  ')
+            + f'extrinsics={extrinsics_path}'
         )
 
     # ── cache callbacks ───────────────────────────────────────────────────────
@@ -183,14 +217,79 @@ class MultiViewProjectorNode(Node):
         except json.JSONDecodeError as e:
             self.get_logger().warn(f'detections_json parse error: {e}')
 
+    def _top_json_cb(self, msg: String) -> None:
+        try:
+            self._top_detections = json.loads(msg.data)
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(f'top detections_json parse error: {e}')
+
+    def _top_mask_cb(self, mask_msg: Image) -> None:
+        self._top_mask = mask_msg
+        self._try_fire()
+
     # ── trigger callback ──────────────────────────────────────────────────────
 
     def _mask_cb(self, mask_msg: Image) -> None:
-        t_total = time.monotonic()
+        # The EE mask is the trigger. When the top labeled pass is enabled we
+        # still need its mask, which comes from an independent SAM instance —
+        # so cache and let _try_fire decide whether to wait.
+        self._pending_ee_mask = mask_msg
+        self._try_fire()
+
+    def _try_fire(self, from_timeout: bool = False) -> None:
         # Freeze mode: 한 번 publish 한 뒤로 신규 mask 전부 drop. latched QoS 가
         # 마지막 발행을 BT 에 영원히 노출하므로 추가 갱신은 오히려 해로움.
         if self._frozen:
             return
+
+        ee_mask = self._pending_ee_mask
+        if ee_mask is None:
+            # Top mask arrived first — nothing to project until the EE trigger.
+            return
+
+        have_top = self._top_mask is not None and self._top_detections is not None
+
+        if self._top_labeled_enabled and not have_top and not from_timeout:
+            self._arm_top_timer()
+            return
+
+        if self._top_labeled_enabled and not have_top:
+            self.get_logger().warn(
+                f'top mask did not arrive within {self._top_mask_timeout:.1f}s '
+                '— publishing the EE view only. /world_map_result will carry NO '
+                'destination centroid, so the place phase has no pose.')
+
+        self._cancel_top_timer()
+        # Masks are one-shot triggers, never replayed.
+        self._pending_ee_mask = None
+        top_mask = self._top_mask if have_top else None
+        top_dets = self._top_detections if have_top else None
+        self._top_mask = None
+
+        self._process(ee_mask, top_mask, top_dets)
+
+    def _arm_top_timer(self) -> None:
+        if self._top_wait_timer is None:
+            self._top_wait_timer = self.create_timer(
+                self._top_mask_timeout, self._on_top_timeout)
+
+    def _on_top_timeout(self) -> None:
+        self._cancel_top_timer()
+        self._try_fire(from_timeout=True)
+
+    def _cancel_top_timer(self) -> None:
+        if self._top_wait_timer is not None:
+            self._top_wait_timer.cancel()
+            self.destroy_timer(self._top_wait_timer)
+            self._top_wait_timer = None
+
+    def _process(
+        self,
+        mask_msg: Image,
+        top_mask: Optional[Image] = None,
+        top_detections: Optional[List[Dict]] = None,
+    ) -> None:
+        t_total = time.monotonic()
         # EE camera is required — top camera is optional (degrades gracefully)
         if self._ee_depth is None or self._ee_info is None:
             self.get_logger().warn('Waiting for EE camera depth/camera_info...')
@@ -209,12 +308,47 @@ class MultiViewProjectorNode(Node):
         )
         dt_ee = time.monotonic() - t_ee
 
+        # ── Top camera view — labeled pass (dual-view Slow Brain) ─────────────
+        # The wrist camera cannot see the destination, so this is where a
+        # DESTINATION centroid actually comes from. Same engine call as the EE
+        # pass, just with the top depth/intrinsics/extrinsics.
+        top_labeled: List[CategoryPoints] = []
+        dt_top_labeled = 0.0
+        if top_mask is not None and top_detections is not None:
+            if self._top_depth is None or self._top_info is None:
+                self.get_logger().warn(
+                    'top mask received but no top depth/camera_info cached — '
+                    'skipping the top labeled pass'
+                )
+            else:
+                t_tl = time.monotonic()
+                top_labeled = [
+                    cp for cp in self._project_labeled(
+                        self._top_depth, self._top_info, top_mask,
+                        top_detections, self._R_TOP, self._t_TOP,
+                    )
+                    # Drop FREE. FREE means "the EE camera looked here and found
+                    # nothing", which is what lets the octomap treat it as empty
+                    # space. The top camera's background is the table and every
+                    # other object — that is UNKNOWN geometry, and calling it
+                    # FREE would carve real obstacles out of the planning scene.
+                    if cp.category != CATEGORY_FREE
+                ]
+                dt_top_labeled = time.monotonic() - t_tl
+                self.get_logger().info(
+                    'Top labeled: ' + (', '.join(
+                        f'{cp.label}={len(cp.points)}pts' for cp in top_labeled)
+                        or '(nothing segmented)')
+                )
+
         # ── Top camera view — Pass 1: remove UNKNOWN near EE seg (XY + Z gate) ──
         top_pts: Optional[CategoryPoints] = None
         dt_top = 0.0
         if self._top_depth is not None and self._top_info is not None:
             t_top = time.monotonic()
-            ee_seg_pts = collect_seg_points(ee_pts)
+            # Top-labeled points are fed in alongside the EE ones so the basket
+            # is not emitted twice — once as DESTINATION and again as UNKNOWN.
+            ee_seg_pts = collect_seg_points(ee_pts + top_labeled)
             top_pts = self._project_unknown(
                 self._top_depth, self._top_info,
                 self._R_TOP, self._t_TOP,
@@ -241,6 +375,8 @@ class MultiViewProjectorNode(Node):
 
         if ee_pts:
             all_category_points.extend(ee_pts)
+        if top_labeled:
+            all_category_points.extend(top_labeled)
         if top_pts is not None:
             all_category_points.append(top_pts)
 
@@ -286,7 +422,8 @@ class MultiViewProjectorNode(Node):
         top_age_text = f"{top_depth_age:.3f}s" if top_depth_age is not None else "n/a"
         self.get_logger().info(
             f"[PROFILE][projector] total={time.monotonic() - t_total:.3f}s "
-            f"ee_project={dt_ee:.3f}s top_project={dt_top:.3f}s "
+            f"ee_project={dt_ee:.3f}s top_labeled={dt_top_labeled:.3f}s "
+            f"top_project={dt_top:.3f}s "
             f"free_unknown_filter={dt_filter:.3f}s "
             f"build_publish={dt_build_publish:.3f}s save_ply={dt_save:.3f}s "
             f"categories={len(all_category_points)} "

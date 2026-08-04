@@ -212,6 +212,33 @@ def order_detections(objects: list[Detection]) -> list[Detection]:
     return ordered
 
 
+def keep_only(objects: list[Detection], category: str) -> list[Detection]:
+    """Demote every detection except the first ``category`` one to OBSTACLE.
+
+    Used by the dual-view path: the overhead pass contributes ONLY the
+    destination, and the wrist pass ONLY the target.  Without this both views
+    would emit a TARGET, sam_a100 would segment both, and ``build_result_json``
+    (which keys /world_map_result by category and overwrites on collision) would
+    let the overhead target silently replace the wrist one — the wrist cloud is
+    the one grasping depends on.
+
+    Array positions are preserved on purpose.  The mask value is ``index + 1``,
+    and ``mask_projection_pkg`` resolves a value back through
+    ``detections[value - 1]["category"]``, so demoting in place keeps the join
+    valid wherever the survivor happens to sit.
+    """
+    kept = False
+    out: list[Detection] = []
+    for det in objects:
+        if det.category == category and not kept:
+            kept = True
+            out.append(det)
+        else:
+            out.append(det if det.category == "OBSTACLE"
+                       else det.replaced(category="OBSTACLE"))
+    return out
+
+
 def scale_boxes(
     objects: list[Detection],
     convention: str,
@@ -266,20 +293,34 @@ def clamp_boxes(objects: list[Detection], w: int, h: int) -> list[Detection]:
     return kept
 
 
-def build_labeled_detections(objects: list[Detection]) -> list[dict[str, Any]]:
+def build_labeled_detections(
+    objects: list[Detection],
+    target_label: str = "",
+) -> list[dict[str, Any]]:
     """Serialise to the /qwen/labeled_detections payload.
 
     ``idx`` is emitted for humans and logs only.  Nothing downstream joins on
     it — mask_projection_pkg and sam_a100 both use array position.  Do not
     reintroduce it as a join key.
+
+    ``target_label`` (the instruction-derived name from GroundingResult) is
+    attached to the TARGET entry as a second name.  The two genuinely differ:
+    asked for "the glass cup", the VLM describes what it sees as ``label``
+    "white cylinder" — accurate, and useless to graspgen_pkg, which keyword-
+    matches the TARGET text to decide whether to run transparent depth
+    restoration and which grasp profile to use.  Carrying both names means the
+    match sees the word the operator actually used.
     """
-    return [
-        {
+    out: list[dict[str, Any]] = []
+    for i, det in enumerate(objects):
+        entry: dict[str, Any] = {
             "idx": i,
             "label": det.label,
             "category": det.category,
             "bbox_xyxy": [round(v, 2) for v in det.bbox_xyxy],
             "confidence": round(det.confidence, 4),
         }
-        for i, det in enumerate(objects)
-    ]
+        if det.category == "TARGET" and target_label:
+            entry["target_label"] = target_label
+        out.append(entry)
+    return out

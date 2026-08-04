@@ -122,6 +122,18 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('detections_topic',
                               default_value='/qwen/labeled_detections'),
 
+        # ── Top-view labeled pass (dual-view Slow Brain) ──────────────────────
+        # Both empty = off; the top camera then contributes UNKNOWN geometry
+        # only, as before. Set both to project the overhead SAM mask with the
+        # top depth image — the only source of a DESTINATION centroid, since the
+        # wrist camera cannot see the basket (near limit x ~ 0.58 m in
+        # panda_link0 vs the basket at x = 0.48).
+        DeclareLaunchArgument('top_mask_topic', default_value=''),
+        DeclareLaunchArgument('top_detections_topic', default_value=''),
+        DeclareLaunchArgument('top_mask_timeout_sec', default_value='8.0',
+                              description='publish EE-only if the top mask has '
+                                          'not arrived this long after the EE one'),
+
         # ── Output topics ─────────────────────────────────────────────────────
         DeclareLaunchArgument('output_cloud_topic',
                               default_value='/world_map'),
@@ -165,6 +177,9 @@ def generate_launch_description() -> LaunchDescription:
                 'ee_camera_info_topic':   LaunchConfiguration('ee_camera_info_topic'),
                 'mask_topic':             LaunchConfiguration('mask_topic'),
                 'detections_topic':       LaunchConfiguration('detections_topic'),
+                'top_mask_topic':         LaunchConfiguration('top_mask_topic'),
+                'top_detections_topic':   LaunchConfiguration('top_detections_topic'),
+                'top_mask_timeout_sec':   LaunchConfiguration('top_mask_timeout_sec'),
                 'output_cloud_topic':     LaunchConfiguration('output_cloud_topic'),
                 'output_result_topic':    LaunchConfiguration('output_result_topic'),
                 'output_raw_cloud_topic': LaunchConfiguration('output_raw_cloud_topic'),

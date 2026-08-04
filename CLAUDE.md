@@ -45,9 +45,13 @@ wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-
 wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
      -O models/g-sam/sam_vit_b_01ec64.pth
 
-# 3. System deps for BehaviorTree.CPP (the library source itself is already
-#    vendored in-tree at ros_pkgs/src/behavior_tree/ — nothing to clone)
-sudo apt install -y libzmq3-dev libsqlite3-dev libtinyxml2-dev
+# 3. System deps. libzmq3-dev/libsqlite3-dev/libtinyxml2-dev are for
+#    BehaviorTree.CPP (the library source is already vendored in-tree at
+#    ros_pkgs/src/behavior_tree/ — nothing to clone). xterm is required by the
+#    Slow Brain launch files, which wrap instruction_prompt_node in one because
+#    `ros2 launch` does not forward stdin; without it the launch dies with
+#    FileNotFoundError before you can type anything.
+sudo apt install -y libzmq3-dev libsqlite3-dev libtinyxml2-dev xterm
 
 # 4. YOLO venv (separate from gsam_venv — yolo_hazard_pkg launch files hardcode it)
 python3 -m venv .venv-yolo
