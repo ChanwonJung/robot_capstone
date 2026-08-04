@@ -32,26 +32,39 @@ from std_msgs.msg import String
 
 
 def _load_extrinsics(path: str, camera_key: str):
-    """Return (R 3×3, t 3×1) from a camera_extrinsics_*.yaml file.
+    """Return (R 3×3, t 3×1, ok) from a camera_extrinsics_*.yaml file.
 
-    The YAML format mirrors mask_projection_pkg's camera_extrinsics.yaml.
-    Falls back to identity if the file is missing or the key is absent.
+    The YAML format mirrors mask_projection_pkg's camera_extrinsics.yaml, whose
+    keys are `R` and `t`.  `rotation`/`translation` are accepted as aliases
+    because an earlier revision of this loader only knew those names — it
+    therefore threw KeyError on every real file and silently fell back to
+    identity, publishing camera-frame centroids that look like robot-frame ones.
+
+    `ok` is False when a path was given but could not be read. The caller must
+    not publish in that case: a centroid in the camera frame is not a degraded
+    answer, it is a wrong one, and it flows straight into the BT's place pose.
     """
     if not path:
-        return np.eye(3), np.zeros(3)
+        return np.eye(3), np.zeros(3), True
     try:
         with open(path) as f:
             cfg = yaml.safe_load(f) or {}
-        cam = cfg.get(camera_key, {})
-        R = np.array(cam["rotation"],    dtype=float).reshape(3, 3)
-        t = np.array(cam["translation"], dtype=float)
-        return R, t
+        cam = cfg.get(camera_key)
+        if not cam:
+            raise KeyError(f"no '{camera_key}' block")
+        rot = cam.get("R", cam.get("rotation"))
+        trans = cam.get("t", cam.get("translation"))
+        if rot is None or trans is None:
+            raise KeyError("expected 'R' and 't' (or 'rotation'/'translation')")
+        R = np.array(rot, dtype=float).reshape(3, 3)
+        t = np.array(trans, dtype=float).reshape(3)
+        return R, t, True
     except Exception as e:
         import rclpy.logging
-        rclpy.logging.get_logger("yolo_world_map").warning(
+        rclpy.logging.get_logger("yolo_world_map").error(
             f"Could not load extrinsics for '{camera_key}' from '{path}': {e}"
-            " — using identity")
-        return np.eye(3), np.zeros(3)
+            " — /yolo/world_map will NOT be published")
+        return np.eye(3), np.zeros(3), False
 
 
 class YoloWorldMapNode(Node):
@@ -60,8 +73,14 @@ class YoloWorldMapNode(Node):
 
         self.declare_parameter("extrinsics_config",      "")
         self.declare_parameter("detections_topic",       "/yolo_hazard/top/detections_json")
-        self.declare_parameter("depth_topic",            "/top_camera/depth_image")
-        self.declare_parameter("camera_info_topic",      "/top_camera/camera_info")
+        # Isaac publishes the top RGBD camera under /rgbd_camera/, NOT
+        # /top_camera/. The old defaults matched nothing, so _latest_depth stayed
+        # None forever and this node never published a single world map.
+        # robot_defaults.yaml cannot supply these either: it names them
+        # top_depth_topic / top_camera_info_topic, and ROS 2 silently drops YAML
+        # keys that do not match a declared parameter.
+        self.declare_parameter("depth_topic",            "/rgbd_camera/depth_image")
+        self.declare_parameter("camera_info_topic",      "/rgbd_camera/camera_info")
         self.declare_parameter("world_map_topic",        "/yolo/world_map")
         self.declare_parameter("target_centroid_topic",  "/yolo/target_centroid")
         self.declare_parameter("publish_rate_hz",        10.0)
@@ -79,7 +98,7 @@ class YoloWorldMapNode(Node):
         self._r    = float(self.get_parameter("target_search_radius_m").value)
 
         # Extrinsics for the top camera
-        self._R, self._t = _load_extrinsics(ext_path, "top_camera")
+        self._R, self._t, self._extrinsics_ok = _load_extrinsics(ext_path, "top_camera")
 
         # Camera intrinsics (populated from /top_camera/camera_info)
         self._K: Optional[np.ndarray] = None
@@ -132,7 +151,27 @@ class YoloWorldMapNode(Node):
     # ── main tick ──────────────────────────────────────────────────────────
 
     def _tick(self) -> None:
+        # Refusing to publish beats publishing camera-frame centroids that the
+        # BT would treat as panda_link0 metres.
+        if not self._extrinsics_ok:
+            self.get_logger().error(
+                "extrinsics failed to load — not publishing /yolo/world_map",
+                throttle_duration_sec=10.0)
+            return
+
         if self._latest_detections is None or self._latest_depth is None or self._K is None:
+            missing = [
+                name for name, val in (
+                    ("detections", self._latest_detections),
+                    ("depth", self._latest_depth),
+                    ("camera_info", self._K),
+                ) if val is None
+            ]
+            # Without this the node looks healthy while publishing nothing —
+            # exactly the failure mode that hid the wrong depth topic.
+            self.get_logger().warn(
+                f"waiting for {', '.join(missing)} — /yolo/world_map idle",
+                throttle_duration_sec=10.0)
             return
 
         objects = []
@@ -244,7 +283,12 @@ def main(args=None) -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # ros2 launch already shut the context down on SIGINT; calling it again
+        # raises and makes every Ctrl-C print a traceback plus "process has died
+        # [exit code 1]", which reads like a crash in the logs we actually care
+        # about.
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -47,7 +47,15 @@ hazard_level_translator_node:
 
 yolo_world_map_node:
   ros__parameters:
-    # extrinsics_config, depth_topic, camera_info_topic come from robot_defaults.yaml
+    # extrinsics_config comes from the launch argument.
+    #
+    # depth_topic / camera_info_topic are set HERE, not in robot_defaults.yaml:
+    # that file names them top_depth_topic / top_camera_info_topic, and ROS 2
+    # silently ignores YAML keys that do not match a declared parameter — so the
+    # old "comes from robot_defaults" comment was wrong and this node ran on its
+    # own (non-existent) defaults.
+    depth_topic:        "/rgbd_camera/depth_image"
+    camera_info_topic:  "/rgbd_camera/camera_info"
 
     # YOLO topic to consume (top camera only — wide field of view)
     detections_topic:   "/yolo_hazard/top/detections_json"
