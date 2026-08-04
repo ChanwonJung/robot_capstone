@@ -223,8 +223,12 @@ int main(int argc, char** argv)
       scene->grasp_candidates_stamp = node->get_clock()->now();
     });
 
+  // Latched too: qwen_bridge publishes this once per command, well before the
+  // mask -> projector -> graspgen chain finishes. A VOLATILE subscription here
+  // would silently miss it whenever the BT starts after the scan, leaving
+  // destination_spec empty and the place phase with nothing to go on.
   auto sub_grounding = node->create_subscription<std_msgs::msg::String>(
-    "/qwen/grounding_result", 10,
+    "/qwen/grounding_result", latched_qos,
     [scene](const std_msgs::msg::String::SharedPtr msg) {
       std::lock_guard<std::mutex> lk(scene->mtx);
       parse_grounding_result(msg->data, *scene);
