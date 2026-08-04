@@ -1,0 +1,29 @@
+# Python deps for the slow_brain packages (qwen_a100, sam_a100).
+#
+# Install into gsam_venv, the interpreter launch_env.bash puts on PYTHONPATH:
+#     gsam_venv/bin/pip install -r ros_pkgs/src/slow_brain/requirements.txt
+#
+# These are NOT in package.xml because rosdep has no key for msgpack-numpy, and
+# the rosdep-resolvable ones would install to the system interpreter rather than
+# gsam_venv. sam_client.check_deps() raises with the pip line above if the ZMQ
+# stack is missing, so a fresh clone fails loudly rather than at first grasp.
+#
+# rclpy / cv_bridge / sensor_msgs come from apt via package.xml — not listed here.
+
+# ZMQ + msgpack transport to the A100 (SAM 5558; same stack as graspgen 5556).
+# msgpack-numpy is what lets raw ndarrays cross the wire; without its .patch()
+# the image and mask arrays serialise as opaque blobs the server cannot decode.
+pyzmq
+msgpack
+msgpack-numpy
+
+# Qwen grounding: OpenAI-compatible client against the vLLM endpoint on :8000.
+openai
+
+# Reply validation. qwen_schema.py is written to import under BOTH pydantic
+# majors (see its _PYDANTIC_V2 switch), so this is deliberately unpinned.
+pydantic
+
+numpy
+opencv-python-headless
+pyyaml

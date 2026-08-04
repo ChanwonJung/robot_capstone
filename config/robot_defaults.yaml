@@ -9,7 +9,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # DECOUPLING NOTE — grasp candidate pool vs BT retry budget
-#   • max_grasp_candidates — VGN top-K output count (grasp pool published).
+#   • max_grasp_candidates — grasp pool size seeded to the BT blackboard.
 #     GraspGen's equivalent (`topk_num_grasps`) lives in graspgen_params.yaml
 #     and follows the paper-aligned default of 100.
 #   • bt_pick_retries      — BT RetryUntilSuccessful num_attempts. The BT will
@@ -23,7 +23,7 @@
   ros__parameters:
 
     # ── TF / planning frames ─────────────────────────────────────────────────
-    robot_frame:        "panda_link0"   # VGN, projection — origin of robot coords
+    robot_frame:        "panda_link0"   # grasping, projection — origin of robot coords
     planning_frame:     "panda_link0"   # MoveIt — same as robot_frame
     world_frame:        "world"         # RViz / MoveIt workspace root
     planning_group:     "panda_arm"     # MoveIt planning group (7-DOF arm)
@@ -57,8 +57,8 @@
     class_allowlist:    [0, 1, 2]   # detections passed through the filter
     halt_class_ids:     [0]         # classes that trigger E-stop (level 3)
 
-    # ── Grasp candidate pool size (VGN top-K output) ─────────────────────────
-    # VGN publishes at most this many candidates. GraspGen has its own
+    # ── Grasp candidate pool size ────────────────────────────────────────────
+    # Seeded to the BT blackboard. GraspGen has its own
     # `topk_num_grasps` (default 100, see graspgen_params.yaml).
     max_grasp_candidates: 100
 

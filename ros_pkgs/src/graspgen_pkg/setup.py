@@ -18,6 +18,11 @@ setup(
             'config/graspgen_params.yaml',
         ]),
         ('share/' + package_name + '/rviz', [
+            # grasp_demo.rviz was rescued from vgn_grasp_pkg when that package
+            # was retired. Its GraspMarkers display filters on namespace
+            # 'vgn_grasps', which marker_publisher.py still publishes under —
+            # do not rename one without the other.
+            'rviz/grasp_demo.rviz',
             'rviz/graspgen.rviz',
         ]),
     ],

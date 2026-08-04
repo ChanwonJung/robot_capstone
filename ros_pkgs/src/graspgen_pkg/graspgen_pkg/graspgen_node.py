@@ -1,13 +1,13 @@
 """
 graspgen_node.py — ROS 2 node: EE depth + GSAM mask → TARGET cloud → ZMQ GraspGen → /grasp_candidates
 
-Drop-in replacement for vgn_grasp_node. Identical /grasp_candidates JSON and
+Publishes /grasp_candidates in the schema bt_pkg expects. Identical JSON and
 /grasp_markers so bt_pkg needs no changes.
 
 Data flow:
   /ee_camera/depth_image   ─┐
   /ee_camera/camera_info   ─┼─ cache ──→ _result_cb (trigger: /world_map_result)
-  /qwen/mask_image         ─┤            ├─ cloud_extractor → ZMQ → candidates
+  /sam/mask_image          ─┤            ├─ cloud_extractor → ZMQ → candidates
   /qwen/labeled_detections ─┘            └─ marker_publisher → /grasp_markers
 
 Multi-camera: see cloud_extractor.extract_target_cloud() docstring.
@@ -189,7 +189,7 @@ class GraspGenNode(Node):
         p('ee_depth_topic',           '/ee_camera/depth_image')
         p('ee_camera_info_topic',     '/ee_camera/camera_info')
         p('ee_camera_rgb_topic',      '/ee_camera/image_raw')
-        p('mask_topic',               '/qwen/mask_image')
+        p('mask_topic',               '/sam/mask_image')
         p('labeled_detections_topic', '/qwen/labeled_detections')
         p('world_map_result_topic',   '/world_map_result')
         p('grasp_candidates_topic',   '/grasp_candidates')

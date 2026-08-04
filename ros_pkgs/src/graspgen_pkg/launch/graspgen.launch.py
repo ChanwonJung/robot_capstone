@@ -165,7 +165,7 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             'mask_topic',
-            default_value='/qwen/mask_image',
+            default_value='/sam/mask_image',
             description='GSAM/qwen 마스크 토픽 (TARGET 마스크)',
         ),
         DeclareLaunchArgument(

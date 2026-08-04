@@ -170,7 +170,7 @@ The actual contact detection happens in `gripper_action_server.py` (in `moveit_i
 config/robot_defaults.yaml
       max_grasp_candidates: 5
              ↓                           ↓
-  vgn_grasp_node publishes        bt_executor_node reads param
+  graspgen_node publishes         bt_executor_node reads param
   at most N candidates        →   seeds blackboard: {max_grasp_candidates}=5
                                          ↓
                                   pick_and_place.xml

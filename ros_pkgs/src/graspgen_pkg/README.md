@@ -1,7 +1,7 @@
 # graspgen_pkg
 
 EE depth + GSAM 마스크 → GraspGen 원격 추론 → `/grasp_candidates` 발행.  
-`vgn_grasp_pkg`와 동일한 토픽/JSON 형식 — `bt_pkg` 코드 변경 불필요.
+`/grasp_candidates` JSON 형식은 `bt_pkg`가 기대하는 스키마 그대로 — 코드 변경 불필요.
 
 ---
 
@@ -13,7 +13,7 @@ EE depth + GSAM 마스크 → GraspGen 원격 추론 → `/grasp_candidates` 발
 |---|---|
 | `/ee_camera/depth_image` | Isaac Sim |
 | `/ee_camera/camera_info` | Isaac Sim |
-| `/qwen/mask_image` | `qwen_bridge_node` **(트리거)** |
+| `/sam/mask_image` | `sam_mask_node` (legacy: `qwen_bridge_node`) |
 | `/qwen/labeled_detections` | `qwen_bridge_node` |
 | `/world_map_result` | `multi_view_projector_node` **(트리거)** |
 
@@ -90,5 +90,5 @@ ros2 launch graspgen_pkg graspgen.launch.py \
 ## 주의사항
 
 - `topk_num_grasps`(기본 5) = `robot_defaults.yaml`의 `max_grasp_candidates` 값과 반드시 일치시킬 것
-- `vgn_grasp_node`와 동시에 켜면 `/grasp_candidates` 중복 발행 → 둘 중 하나만 실행
+- `target_pose_bridge_node`와 동시에 켜면 `/grasp_candidates` 중복 발행 → 둘 중 하나만 실행
 - 터널 없이 실행하면 5초 후 timeout 오류 발생

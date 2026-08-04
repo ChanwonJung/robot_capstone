@@ -60,7 +60,7 @@ graspgen_node:
     # ── topic names (오버라이드 가능) ─────────────────────────────────────────
     ee_depth_topic:           '/ee_camera/depth_image'
     ee_camera_info_topic:     '/ee_camera/camera_info'
-    mask_topic:               '/qwen/mask_image'
+    mask_topic:               '/sam/mask_image'
     labeled_detections_topic: '/qwen/labeled_detections'
     world_map_result_topic:   '/world_map_result'
     grasp_candidates_topic:   '/grasp_candidates'

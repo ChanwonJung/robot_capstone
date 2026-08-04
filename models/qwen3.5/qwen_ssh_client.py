@@ -35,7 +35,7 @@ BASE_URL: str = f"http://localhost:{LOCAL_PORT}/v1"
 API_KEY: str = "EMPTY"
 
 # Must match the model name your vLLM server was started with
-MODEL_NAME: str = "Qwen/Qwen3.5-VL-9B-Instruct"
+MODEL_NAME: str = "qwen35-local"
 
 REQUEST_TIMEOUT: float = 120.0
 
