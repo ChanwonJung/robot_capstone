@@ -30,6 +30,11 @@ _NS = 'vgn_grasps'
 _FINGER_LEN = 0.060   # finger length along Z (from fingertip toward palm)
 _FINGER_W   = 0.020   # finger width in X (spread direction)
 _FINGER_D   = 0.018   # finger depth in Y
+
+# Direction the Panda fingers actually slide along, in panda_link8 coordinates.
+# panda_hand sits on panda_link8 rotated Rz(-45deg) and the prismatic finger
+# joints move along panda_hand's +Y, which is this diagonal in link8 — not +X.
+_PANDA_FINGER_AXIS = (0.7071067811865476, 0.7071067811865476, 0.0)
 _PALM_LEN   = 0.028   # palm thickness in Z
 _WRIST_LEN  = 0.030   # wrist stub thickness in Z
 
@@ -93,7 +98,13 @@ def build_grasp_markers(
         # Gripper frame axes in world frame
         approach_vec = rot.apply([0.0, 0.0, 1.0])          # +Z = toward object
         back_vec     = -approach_vec                       # -Z = toward wrist
-        x_vec        = rot.apply([1.0, 0.0, 0.0])          # finger spread
+        # Finger spread is NOT the frame's +X on a Panda. panda_hand is
+        # mounted on panda_link8 with Rz(-45deg) and the fingers slide along
+        # panda_hand's +Y, so in panda_link8 coordinates they slide along
+        # (0.7071, 0.7071, 0). Drawing them along +X made the marker look
+        # 45deg off from the real gripper — RViz showed a grasp neatly aligned
+        # with the book while the actual jaws came in across its long side.
+        x_vec        = rot.apply(_PANDA_FINGER_AXIS)       # finger spread
 
         # Fingertips at the actual grasp center: wrist + tcp_offset along
         # approach. The wrist marker stays at `wrist_pos` (= panda_link8).
