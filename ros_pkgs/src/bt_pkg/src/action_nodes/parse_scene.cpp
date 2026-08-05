@@ -62,7 +62,7 @@ BT::NodeStatus ParseScene::tick()
   }
 
   // Pre-compute retreat pose: first candidate z + retreat_offset.
-  auto retreat_pose = lift_z(candidates[0].pose, retreat_z_offset_);
+  auto retreat_pose = retract_along_approach(candidates[0].pose, retreat_z_offset_);
 
   // Write to blackboard
   bb.set<std::vector<GraspCandidate>>("grasp_candidates",       candidates);

@@ -15,7 +15,10 @@ bt_executor_node:
     orientation_tolerance: 0.05   # rad
 
     # Approach and retreat heights above the grasp pose
-    pre_grasp_z_offset: 0.12  # m — lifted pose sent before descending to grasp
+    # NOTE: bt_system.launch.py overrides this with its pre_grasp_z_offset
+    # argument (default 0.03). This value only applies when the node is run
+    # directly with just this params file.
+    pre_grasp_z_offset: 0.12  # m — retracted pose sent before moving to grasp
     retreat_z_offset:   0.15  # m — lifted pose sent after grasping
 
     # TargetVisible thresholds

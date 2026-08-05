@@ -87,15 +87,33 @@
                        attempt from re-acquiring an open jaw. -->
                   <GripperAction command="open"/>
                   <!-- pre_grasp: home → pre_grasp 자세 변화 큼.
-                       lock_orientation=true + tol=1.0rad(57°) — wrist 한 바퀴
-                       도는 path 만 차단, 자연스러운 정렬은 허용.
-                       lock_base_joints=false — base 도 어느정도 움직여야 도달.
+                       lock_orientation=false — 여기서는 자세를 묶지 않는다.
+                       경로 제약은 목표 자세 기준 3축 ±tol 을 path 전체에
+                       강제하는데, 회전 대칭이 아닌 타깃(책: yaw 가 책 두께
+                       방향에 고정)에 멀리 이동할 때 회랑이 좁아져 RRTConnect
+                       가 그 안에서 헤매는 경로를 낸다. shortcut 단순화는
+                       직선이 회랑을 벗어나므로 이걸 못 편다. 실제로 책
+                       (y=-0.151, 유일한 -Y 타깃) 에서만 사과 쪽으로 크게
+                       돌았다가 되돌아오는 궤적이 나왔고, local planner 가
+                       그 앞부분을 소화하다 stuck abort 로 죽었다.
+                       최종 자세는 goal constraint 가 이미 고정하므로 경로
+                       자세를 풀어도 grasp 정렬은 보장된다. 자세를 묶어야
+                       하는 건 아래 grasp/retreat 직선 구간(tol 0.2)뿐이다.
+                       lock_base_joints=true — MoveIt 은 pose goal 의 IK 를
+                       랜덤 시드로 샘플링해서 나온 해를 그대로 쓴다. 회전
+                       대칭 타깃은 현재 자세 근처 해가 걸리지만, yaw 가 고정된
+                       책에서는 뒤틀린 분기가 걸려 base 를 -110° 까지 돌리는
+                       경로가 나왔다(목표 방위각은 -14°). 관절 경로 제약으로
+                       j1~j3 를 현재값 ±0.3rad 에 묶어 정상 분기만 남긴다.
+                       책 방위각 -14° 는 시작값 j1≈0 에서 0.25rad 이라 이
+                       여유 안에 들어온다. 경로가 짧아지면 waypoint 당 점프도
+                       작아져 local planner 의 추종 실패(stuck)도 같이 준다.
                        min_path_z=0.15 — OMPL 이 책 옆 아래로 path 만드는 것
                        방지. 책 top (z~0.05~0.10) 보다 충분히 위에서만 sampling.
                        pre_grasp 자체 z (~0.22) 보다 약간 낮아 도달 가능. -->
                   <MoveAction pose_key="pre_grasp_pose" speed="0.3"
-                              lock_orientation="true" lock_orientation_tol="1.0"
-                              lock_base_joints="false"
+                              lock_orientation="false"
+                              lock_base_joints="true"
                               min_path_z="0.15"/>
                   <!-- grasp: pre_grasp → grasp 직선 descent.
                        lock_orientation=true + tol=0.2rad(11°) — strict. -->

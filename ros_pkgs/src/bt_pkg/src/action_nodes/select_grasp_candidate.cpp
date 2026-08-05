@@ -24,7 +24,7 @@ BT::NodeStatus SelectGraspCandidate::tick()
   }
 
   const auto& c = candidates[idx];
-  auto pre_grasp = lift_z(c.pose, pre_grasp_z_offset_);
+  auto pre_grasp = retract_along_approach(c.pose, pre_grasp_z_offset_);
 
   bb.set<geometry_msgs::msg::PoseStamped>("grasp_pose",     c.pose);
   bb.set<geometry_msgs::msg::PoseStamped>("pre_grasp_pose", pre_grasp);

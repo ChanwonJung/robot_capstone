@@ -34,8 +34,15 @@ inline double dist3(const std::array<double, 3>& a, const std::array<double, 3>&
   return std::sqrt(dx*dx + dy*dy + dz*dz);
 }
 
-// Return pose with z raised by dz (all other fields unchanged).
-geometry_msgs::msg::PoseStamped lift_z(
-  const geometry_msgs::msg::PoseStamped& in, double dz);
+// Back the pose off by `dist` along its OWN approach axis (the gripper frame's
+// +Z, so the retracted pose sits behind the jaws), orientation unchanged.
+//
+// For a straight top-down grasp the approach is world -Z, so this is exactly
+// "raise z by dist" — the behaviour this replaced. It differs only when the
+// grasp is tilted (graspgen's align_tilt profile): there, lifting along world Z
+// puts the pre-grasp off the gripper's own axis, so the descent enters the
+// object at an angle instead of sliding down alongside it.
+geometry_msgs::msg::PoseStamped retract_along_approach(
+  const geometry_msgs::msg::PoseStamped& in, double dist);
 
 }  // namespace bt_pkg

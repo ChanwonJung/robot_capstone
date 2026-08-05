@@ -54,11 +54,21 @@ geometry_msgs::msg::PoseStamped compute_place_pose(
   return pose;
 }
 
-geometry_msgs::msg::PoseStamped lift_z(
-  const geometry_msgs::msg::PoseStamped& in, double dz)
+geometry_msgs::msg::PoseStamped retract_along_approach(
+  const geometry_msgs::msg::PoseStamped& in, double dist)
 {
   auto out = in;
-  out.pose.position.z += dz;
+  // Gripper frame +Z is the approach direction, so backing off is -Z local.
+  // Rotate (0, 0, -dist) into the world frame with the pose's own quaternion:
+  //   v' = v + 2 * qv x (qv x v + w*v)
+  const auto& q = in.pose.orientation;
+  const double vx = 0.0, vy = 0.0, vz = -dist;
+  const double tx = 2.0 * (q.y * vz - q.z * vy);
+  const double ty = 2.0 * (q.z * vx - q.x * vz);
+  const double tz = 2.0 * (q.x * vy - q.y * vx);
+  out.pose.position.x += vx + q.w * tx + (q.y * tz - q.z * ty);
+  out.pose.position.y += vy + q.w * ty + (q.z * tx - q.x * tz);
+  out.pose.position.z += vz + q.w * tz + (q.x * ty - q.y * tx);
   return out;
 }
 
