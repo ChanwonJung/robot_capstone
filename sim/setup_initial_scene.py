@@ -380,6 +380,27 @@ def iter_collision_prims(root_prim):
             yield prim
 
 
+def set_double_sided(root_prim):
+    """Render both faces of every mesh in the subtree.
+
+    UsdGeomGprim.doubleSided defaults to FALSE, and the imported assets do not
+    author it. Any mesh whose winding came out inverted in the GLB -> USD
+    conversion then has its outward faces culled, so you see straight through
+    the near wall into the interior.
+
+    This is not cosmetic: a culled face writes no depth either, so the top
+    camera measures the surface BEHIND the wall. For the basket that corrupts
+    bbox_3d_world.max.z, which is the rim height the place pose is built on.
+    """
+    count = 0
+    for prim in Usd.PrimRange(root_prim):
+        gprim = UsdGeom.Gprim(prim)
+        if gprim:
+            gprim.CreateDoubleSidedAttr().Set(True)
+            count += 1
+    return count
+
+
 def apply_static_collider(root_prim, approximation="convexHull"):
     for prim in iter_collision_prims(root_prim):
         UsdPhysics.CollisionAPI.Apply(prim)
@@ -399,6 +420,11 @@ def create_dynamic_body_root(stage, path, translate, mass):
     physx_rigid_body.CreateLinearDampingAttr(0.05)
     physx_rigid_body.CreateSleepThresholdAttr(0.0)
     physx_rigid_body.CreateStabilizationThresholdAttr(0.0)
+    # Continuous collision detection. The basket collider is a triangle mesh,
+    # which has zero thickness — a discrete step large enough to straddle a wall
+    # passes through it. An object dropped into the basket reaches ~0.8 m/s,
+    # i.e. ~13 mm per substep, which is the same order as the wall geometry.
+    physx_rigid_body.CreateEnableCCDAttr(True)
     mass_api = UsdPhysics.MassAPI.Apply(root)
     mass_api.CreateMassAttr(float(mass))
     return root
@@ -550,12 +576,23 @@ def build_basket(stage, path):
         rotate_xyz_deg=BASKET_ROTATION_DEG,
     )
     if BASKET_ASSET.exists():
-        add_visual_reference(
+        visual = add_visual_reference(
             stage,
             f"{path}/Visual",
             BASKET_ASSET,
             scale=BASKET_SCALE,
         )
+        # The basket had NO collider at all — visual geometry only — so anything
+        # placed in it fell straight through to the table.
+        #
+        # approximation="none" (exact triangle mesh) rather than the convexHull
+        # default: a convex hull caps the opening, so the object would rest on
+        # top of the rim instead of going inside. Triangle-mesh colliders are
+        # static-only in PhysX, which is fine — the basket is a static prop with
+        # no RigidBodyAPI. Same reasoning as the table-top fix below.
+        apply_static_collider(visual, approximation="none")
+        n = set_double_sided(visual)
+        print(f"[basket] triangle-mesh collider + doubleSided on {n} gprim(s)")
     return root
 
 
