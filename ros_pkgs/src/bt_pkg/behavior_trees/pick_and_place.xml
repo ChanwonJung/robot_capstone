@@ -1,43 +1,25 @@
 <?xml version="1.0"?>
 <!--
-  pick_and_place.xml — Main behavior tree for the robot capstone pipeline.
+  pick_and_place.xml — main behavior tree. See CLAUDE.md "bt_pkg internals".
 
-  Top-level structure:
-    RepeatForever wraps the whole pipeline so the robot waits for the next
-    command after each successful pick-and-place cycle.
+  E-Stop Guard: EmergencyStopClear re-checked every 100 ms; hazard_level >= 3
+  (arm/person) suspends the whole tree. Levels 0-1 belong to the hybrid planner
+  and hazard_collision_injector, not the BT.
 
-  E-Stop Guard (ReactiveSequence):
-    EmergencyStopClear is re-checked every 100 ms. If hazard_level >= 3
-    (arm/person detected by YOLO), the entire tree suspends.
-    Hazard levels 0-1 are handled by the hybrid planner and
-    hazard_collision_injector — the BT does not intervene.
+  Pick retries = {bt_pick_retries} (robot_defaults.yaml, default 5), decoupled
+  from the grasp pool: graspgen may publish 100 candidates but flooding goals
+  into the hybrid planner triggers SIGABRT, so the BT only tries the top N.
 
-  Pick phase retry logic:
-    RetryUntilSuccessful reads num_attempts from the blackboard key
-    {bt_pick_retries}, which bt_executor_node sets from the ROS parameter
-    bt_pick_retries (default 5, defined in robot_defaults.yaml).
-    This is *decoupled* from the grasp pool size — the grasp publisher may
-    expose up to 100 candidates (paper-aligned goal set), but the BT only
-    attempts the top N to avoid SIGABRT-prone goal flooding into the
-    hybrid planner.
-    SelectGraspCandidate advances the candidate index on each call;
-    returning FAILURE when exhausted burns through remaining retry slots
-    cleanly. After all attempts fail, Fallback escalates to Pick Recovery.
-
-  RequestReplan intentionally returns FAILURE to propagate failure through
-  Pick Recovery → Pick Fallback → Main Pipeline → RepeatForever re-ticks
-  from WaitForScene. This is a standard BT "restart" pattern.
+  RequestReplan returns FAILURE on purpose — that propagates up to
+  KeepRunningUntilFailure and restarts from WaitForScene. Standard BT restart.
 -->
 <root BTCPP_format="4">
   <BehaviorTree ID="PickAndPlace">
 
-    <!--
-      Inverter trick: KeepRunningUntilFailure exits on FAILURE. We want it
-      to exit when the inner pipeline reaches SUCCESS (= grasp + retreat
-      done). Inverter flips SUCCESS↔FAILURE so:
-        inner SUCCESS  → Inverter FAILURE → outer EXIT  (one-shot demo done)
-        inner FAILURE  → Inverter SUCCESS → outer RUNNING → restart (retry)
-    -->
+    <!-- Inverter trick: KeepRunningUntilFailure exits on FAILURE, but we want
+         to exit on inner SUCCESS (grasp + retreat done), so flip it.
+           inner SUCCESS → FAILURE → outer EXIT     (one-shot demo done)
+           inner FAILURE → SUCCESS → outer RUNNING  (retry) -->
     <KeepRunningUntilFailure>
       <Inverter>
       <ReactiveSequence name="E-Stop Guard">
@@ -56,61 +38,34 @@
           <!-- ─── PICK PHASE ──────────────────────────────────────────── -->
           <Fallback name="Pick or Recover">
 
-            <!--
-              TargetVisible is re-checked every tick by ReactiveSequence.
-              If the target disappears mid-motion the branch aborts and
-              Fallback escalates to Pick Recovery.
-            -->
+            <!-- ReactiveSequence re-checks the guard every tick, so a target
+                 lost mid-motion aborts into Pick Recovery. -->
             <ReactiveSequence name="Visibility Guard">
-              <!-- TargetVisible temporarily replaced with AlwaysSuccess:
-                   YOLO model only knows arm/bottle/box (3 classes). For non-
-                   YOLO targets (e.g. book/cup from GSAM/Qwen), the live
-                   /yolo/target_centroid is never published, so TargetVisible
-                   always reports stale. Bypass for demo runs that pick GSAM
-                   targets outside YOLO's vocab. Revert before integrating
-                   with hazard tracking. -->
+              <!-- TargetVisible stubbed out: YOLO knows only arm/bottle/box, so
+                   GSAM/Qwen targets (book, cup) never get /yolo/target_centroid
+                   and it always reports stale. Revert when integrating with
+                   hazard tracking. -->
               <AlwaysSuccess/>
 
-              <!--
-                Retries = bt_pick_retries (robot_defaults.yaml, default 5).
-                Each SelectGraspCandidate call advances the grasp candidate
-                index, so each retry tries the next-best published grasp.
-                The published pool itself may be much larger than this
-                budget (paper-aligned top-100 for GraspGen) — the BT only
-                attempts the top N candidates here.
-              -->
+              <!-- Each SelectGraspCandidate advances the index, so a retry
+                   tries the next-best grasp. -->
               <RetryUntilSuccessful num_attempts="{bt_pick_retries}">
                 <Sequence name="Pick Attempt">
                   <SelectGraspCandidate/>
-                  <!-- Open BEFORE approach so a previously failed close
-                       (fingers stuck closed on air) doesn't prevent this
-                       attempt from re-acquiring an open jaw. -->
+                  <!-- Open BEFORE approach — a previous failed close can leave
+                       the fingers stuck shut on air. -->
                   <GripperAction command="open"/>
-                  <!-- pre_grasp: home → pre_grasp 자세 변화 큼.
-                       lock_orientation=false — 여기서는 자세를 묶지 않는다.
-                       경로 제약은 목표 자세 기준 3축 ±tol 을 path 전체에
-                       강제하는데, 회전 대칭이 아닌 타깃(책: yaw 가 책 두께
-                       방향에 고정)에 멀리 이동할 때 회랑이 좁아져 RRTConnect
-                       가 그 안에서 헤매는 경로를 낸다. shortcut 단순화는
-                       직선이 회랑을 벗어나므로 이걸 못 편다. 실제로 책
-                       (y=-0.151, 유일한 -Y 타깃) 에서만 사과 쪽으로 크게
-                       돌았다가 되돌아오는 궤적이 나왔고, local planner 가
-                       그 앞부분을 소화하다 stuck abort 로 죽었다.
-                       최종 자세는 goal constraint 가 이미 고정하므로 경로
-                       자세를 풀어도 grasp 정렬은 보장된다. 자세를 묶어야
-                       하는 건 아래 grasp/retreat 직선 구간(tol 0.2)뿐이다.
-                       lock_base_joints=true — MoveIt 은 pose goal 의 IK 를
-                       랜덤 시드로 샘플링해서 나온 해를 그대로 쓴다. 회전
-                       대칭 타깃은 현재 자세 근처 해가 걸리지만, yaw 가 고정된
-                       책에서는 뒤틀린 분기가 걸려 base 를 -110° 까지 돌리는
-                       경로가 나왔다(목표 방위각은 -14°). 관절 경로 제약으로
-                       j1~j3 를 현재값 ±0.3rad 에 묶어 정상 분기만 남긴다.
-                       책 방위각 -14° 는 시작값 j1≈0 에서 0.25rad 이라 이
-                       여유 안에 들어온다. 경로가 짧아지면 waypoint 당 점프도
-                       작아져 local planner 의 추종 실패(stuck)도 같이 준다.
-                       min_path_z=0.15 — OMPL 이 책 옆 아래로 path 만드는 것
-                       방지. 책 top (z~0.05~0.10) 보다 충분히 위에서만 sampling.
-                       pre_grasp 자체 z (~0.22) 보다 약간 낮아 도달 가능. -->
+                  <!-- pre_grasp: home → pre_grasp 는 자세 변화가 크다.
+                       lock_orientation=false — 경로 제약은 목표 자세 ±tol 을
+                       path 전체에 강제해 회랑이 좁아지고, yaw 가 고정된 책에서
+                       RRTConnect 가 크게 우회 → local planner stuck abort.
+                       최종 자세는 goal constraint 가 잡으므로 안전하다.
+                       lock_base_joints=true — pose goal IK 를 랜덤 시드로
+                       뽑아 책에서 base -110° 로 뒤틀린 분기가 걸렸다(목표
+                       방위각 -14°). j1~j3 를 현재값 ±0.3rad 로 묶어 정상
+                       분기만 남긴다. 경로가 짧아지면 stuck 도 준다.
+                       min_path_z=0.15 — OMPL 이 책 옆 아래로 파고드는 path
+                       방지. 책 top(~0.10) 위, pre_grasp z(~0.22) 아래. -->
                   <MoveAction pose_key="pre_grasp_pose" speed="0.3"
                               lock_orientation="false"
                               lock_base_joints="true"
@@ -130,12 +85,9 @@
 
             </ReactiveSequence>
 
-            <!--
-              Pick Recovery: target lost or all candidates exhausted.
-              MoveToHome returns the arm to a safe position.
-              RequestReplan publishes /bt/replan_request and returns FAILURE
-              to restart the pipeline from WaitForScene.
-            -->
+            <!-- Target lost or candidates exhausted: park the arm, then
+                 RequestReplan publishes /bt/replan_request and FAILs to
+                 restart from WaitForScene. -->
             <Sequence name="Pick Recovery">
               <MoveToHome speed="0.5"/>
               <RequestReplan/>
@@ -143,28 +95,77 @@
 
           </Fallback>
 
-          <!-- ─── DESTINATION + PLACE 단계 (임시 비활성화) ─────────────────
-               Qwen stub은 destination grounding을 채우지 않아 place_pose가
-               (0,0,0)이 되어 place 단계가 매번 실패함. 데모는 "grasp →
-               retreat까지 잡고 멈춤"으로 단순화. 차주에 Qwen 실 노드 또는
-               하드코딩 park-pose 추가로 복원 예정.
-          <UpdateTargetPose/>
-          <Fallback name="Place or Recover">
-            <RetryUntilSuccessful num_attempts="3">
-              <Sequence name="Place Attempt">
-                <MoveAction pose_key="place_pose"   speed="0.3"/>
-                <GripperAction command="open"/>
-                <MoveAction pose_key="retreat_pose" speed="0.2"/>
-              </Sequence>
-            </RetryUntilSuccessful>
-            <MoveToHome speed="0.5"/>
-          </Fallback>
-          -->
+          <!-- ─── DESTINATION + PLACE 단계 ────────────────────────────────
+               HasDestinationCentroid 는 spec 이 아니라 /world_map_result 가
+               실어온 centroid 를 본다. "박스에 넣어줘"인데 박스가 안 보이면
+               spec 은 꽉 차고 centroid 만 없어서, spec 가드는 통과시켜
+               (0,0,0) = 로봇 자기 베이스로 내리꽂는다. 상세는 CLAUDE.md
+               "Place phase". -->
+          <Fallback name="Place If Grounded">
 
-          <!-- 잡은 후 retreat 자세 그대로 유지하며 main pipeline 종료.
-               외곽 KeepRunningUntilFailure 가 다시 tick하지만 이후 시도는
-               책이 그리퍼에 있어 무해하게 실패함. -->
-          <AlwaysSuccess/>
+            <Sequence name="Place Phase">
+              <HasDestinationCentroid/>
+
+              <!-- 놓는 높이 = destination bbox 윗면(림) + 잡은 물체 자체 높이.
+                   바구니 centroid 기준이던 예전 값은 림 아래였다. -->
+              <UpdateTargetPose/>
+
+              <!-- num_attempts 3 이하 — 골 연타는 hybrid 컨테이너 SIGABRT. -->
+              <RetryUntilSuccessful num_attempts="3">
+                <Sequence name="Place Attempt">
+                  <!-- 물체를 든 이동이라 자세는 안 묶는다(도달성).
+                       최종 자세는 goal constraint 가 잡는다. -->
+                  <MoveAction pose_key="place_pose" speed="0.3"
+                              min_path_z="0.15"/>
+                  <GripperAction command="open"/>
+                  <!-- post_place_pose = place_pose 에서 접근축 따라 상승.
+                       pick 의 retreat_pose 는 "집었던 자리" 위라, 재사용하면
+                       열린 그리퍼로 씬을 가로질러 끌고 간다. -->
+                  <MoveAction pose_key="post_place_pose" speed="0.2"
+                              lock_orientation="true" lock_orientation_tol="0.2"/>
+                </Sequence>
+              </RetryUntilSuccessful>
+            </Sequence>
+
+            <!-- pick-only 이거나 place 3회 실패 → 물체를 든 채 정상 종료.
+                 MoveToHome 은 안 쓴다: /move_action(move_group) 이 hybrid
+                 런치에 없어 항상 실패하고, 그 실패가 트리를 재시작시켜 골
+                 연타로 이어진다. -->
+            <AlwaysSuccess/>
+
+          </Fallback>
+
+          <!-- ─── OBSERVATION 복귀 ────────────────────────────────────────
+               씬이 로드되는 그 자세 = extrinsics 캡처 자세 = 스캔이 유효한
+               유일한 자세. Panda "ready"(initial pose) 가 아니다. 값은 BT
+               기동 시 첫 /joint_states 에서 래치한다.
+               다른 자세에서 찍힌 스캔은 실패가 아니라 **틀린 좌표**를 조용히
+               내놓으므로, 다음 명령 전에 반드시 여기로 돌아와야 한다.
+               pick-only / place 성공 / place 실패 어느 경로로 왔든 지난다.
+
+               Fallback 으로 감싼 이유: 복귀 실패가 파이프라인 전체를 FAILURE
+               로 만들면 골 연타 재시작 루프가 된다. 실패는 로그로만 남긴다. -->
+          <Sequence name="Return To Observation">
+            <!-- 각 단계를 개별 Fallback 으로 감싼다. 복귀나 그리퍼 실패가
+                 파이프라인 전체를 FAILURE 로 만들면 골 연타 재시작 루프가
+                 된다. 실패는 로그로만 남기고 계속 진행. -->
+            <Fallback>
+              <MoveToObservation speed="0.4"/>
+              <AlwaysSuccess/>
+            </Fallback>
+
+            <!-- 대기 자세는 그리퍼를 닫아둔다. 다음 프롬프트의 Pick Attempt 가
+                 맨 처음 open 을 하므로 여기서 닫아두면 상태가 항상 같은
+                 지점에서 출발한다. 또 벌어진 손가락이 EE 카메라 시야를 덜
+                 가린다.
+                 Fallback 필수 — gripper_action_server 의 close 는 "물체를
+                 잡았다(stall)" 일 때만 SUCCESS 이고 빈 손으로 끝까지 닫히면
+                 FAILURE 를 낸다. 여기서는 빈 손이 정상이다. -->
+            <Fallback>
+              <GripperAction command="close"/>
+              <AlwaysSuccess/>
+            </Fallback>
+          </Sequence>
 
         </Sequence>
       </ReactiveSequence>

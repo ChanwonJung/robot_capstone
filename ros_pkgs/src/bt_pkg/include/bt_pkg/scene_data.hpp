@@ -26,6 +26,29 @@ struct DestinationSpec {
   std::string reference_label;  // semantic label of the reference object
   std::string relation;         // "left_of" | "right_of" | "on_top_of" | "near" | ...
   std::string region;           // "left_edge" | "right_edge" | "center" | ... (surface only)
+
+  void clear() { type.clear(); reference_label.clear(); relation.clear(); region.clear(); }
+  bool empty() const { return type.empty() && reference_label.empty(); }
+};
+
+// One category out of /world_map_result. Check the valid flags before posing:
+// an unset centroid is {0,0,0} = the robot's own base.
+struct ObjectGeometry {
+  std::array<double, 3> centroid = {};
+  std::array<double, 3> bbox_min = {};
+  std::array<double, 3> bbox_max = {};
+  bool centroid_valid = false;
+  bool bbox_valid     = false;
+
+  void clear() { *this = ObjectGeometry{}; }
+
+  // Zero when no bbox was published.
+  std::array<double, 3> half_extent() const {
+    if (!bbox_valid) return {};
+    return {0.5 * (bbox_max[0] - bbox_min[0]),
+            0.5 * (bbox_max[1] - bbox_min[1]),
+            0.5 * (bbox_max[2] - bbox_min[2])};
+  }
 };
 
 // One entry from /yolo/world_map
@@ -48,8 +71,8 @@ struct SceneData {
   // rclcpp::Time is RCL_SYSTEM_TIME, so comparing the two throws
   // "can't compare times with different time sources" — pin the clock type here.
   rclcpp::Time world_map_stamp{0, 0, RCL_ROS_TIME};
-  std::array<double, 3> target_centroid      = {};
-  std::array<double, 3> destination_centroid = {};
+  ObjectGeometry target;
+  ObjectGeometry destination;
   std::string target_label;
   std::string destination_label;
 
@@ -60,6 +83,9 @@ struct SceneData {
 
   // ── /qwen/grounding_result ───────────────────────────────────────────────
   bool grounding_result_fresh = false;
+  // False for pick-only ("pick up the book"), where qwen omits the key. The
+  // spec is cleared to match, or the previous command's destination survives.
+  bool has_destination = false;
   DestinationSpec destination_spec;
 
   // ── /yolo/world_map (yolo_world_map_node) ───────────────────────────────
@@ -77,6 +103,13 @@ struct SceneData {
   // ── /joint_states ────────────────────────────────────────────────────────
   sensor_msgs::msg::JointState latest_joint_state;
   bool has_joint_state = false;
+
+  // Observation pose, latched from the first /joint_states. The BT starts
+  // before the arm has moved, so that first sample IS the pose the scene loads
+  // at — which is the pose camera_extrinsics.yaml was captured at. Overridden
+  // by the observation_joint_values parameter when it is set.
+  std::vector<double> observation_joint_values;
+  bool has_observation_pose = false;
 
   // ── Replan / cycle coordination ──────────────────────────────────────────
   // WaitForScene only unblocks when both stamps are newer than this.

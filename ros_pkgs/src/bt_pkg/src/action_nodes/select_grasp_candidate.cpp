@@ -5,9 +5,11 @@ namespace bt_pkg {
 
 SelectGraspCandidate::SelectGraspCandidate(const std::string& name,
                                            const BT::NodeConfig& config,
-                                           double pre_grasp_z_offset)
+                                           double pre_grasp_z_offset,
+                                           double retreat_z_offset)
   : BT::SyncActionNode(name, config)
   , pre_grasp_z_offset_(pre_grasp_z_offset)
+  , retreat_z_offset_(retreat_z_offset)
 {}
 
 BT::NodeStatus SelectGraspCandidate::tick()
@@ -25,9 +27,13 @@ BT::NodeStatus SelectGraspCandidate::tick()
 
   const auto& c = candidates[idx];
   auto pre_grasp = retract_along_approach(c.pose, pre_grasp_z_offset_);
+  // Along THIS candidate's approach axis. ParseScene used to compute it once
+  // from candidates[0], so a retry on a tilted grasp dragged the object out.
+  auto retreat = retract_along_approach(c.pose, retreat_z_offset_);
 
   bb.set<geometry_msgs::msg::PoseStamped>("grasp_pose",     c.pose);
   bb.set<geometry_msgs::msg::PoseStamped>("pre_grasp_pose", pre_grasp);
+  bb.set<geometry_msgs::msg::PoseStamped>("retreat_pose",   retreat);
   bb.set<int>("grasp_index", idx + 1);  // advance for next retry
 
   RCLCPP_INFO(rclcpp::get_logger("SelectGraspCandidate"),

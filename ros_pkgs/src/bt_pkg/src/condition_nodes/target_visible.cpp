@@ -30,7 +30,7 @@ BT::NodeStatus TargetVisible::tick()
 
   // Check proximity to initial centroid set by ParseScene.
   const auto& live = scene_->target_centroid_live.point;
-  const auto& seed = scene_->target_centroid;
+  const auto& seed = scene_->target.centroid;
   std::array<double, 3> live_arr = {live.x, live.y, live.z};
 
   double d = dist3(live_arr, seed);

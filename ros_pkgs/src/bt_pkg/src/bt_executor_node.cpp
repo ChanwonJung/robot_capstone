@@ -13,6 +13,7 @@
  *   Level 3 – halt          : EmergencyStopClear returns FAILURE → tree suspends
  */
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -42,28 +43,40 @@ using json = nlohmann::json;
 
 // ── JSON parsers ─────────────────────────────────────────────────────────────
 
+// One category out of /world_map_result (ply_utils.build_result_json).
+// Clears first: an absent category must not leave the previous scan's geometry.
+static void parse_object_geometry(const json& j, const char* key,
+                                  bt_pkg::ObjectGeometry& geom,
+                                  std::string& label)
+{
+  geom.clear();
+  label.clear();
+  if (!j.contains(key)) return;
+
+  const auto& o = j[key];
+  label = o.value("label", "");
+
+  if (o.contains("centroid")) {
+    geom.centroid = {o["centroid"][0], o["centroid"][1], o["centroid"][2]};
+    geom.centroid_valid = true;
+  }
+  if (o.contains("bbox_3d_world")) {
+    const auto& b = o["bbox_3d_world"];
+    if (b.contains("min") && b.contains("max")) {
+      geom.bbox_min = {b["min"][0], b["min"][1], b["min"][2]};
+      geom.bbox_max = {b["max"][0], b["max"][1], b["max"][2]};
+      geom.bbox_valid = true;
+    }
+  }
+}
+
 static void parse_world_map_result(const std::string& raw,
                                    bt_pkg::SceneData& scene)
 {
   try {
     auto j = json::parse(raw);
-
-    if (j.contains("target")) {
-      auto& t = j["target"];
-      scene.target_label = t.value("label", "");
-      if (t.contains("centroid")) {
-        scene.target_centroid = {t["centroid"][0], t["centroid"][1], t["centroid"][2]};
-      }
-    }
-
-    if (j.contains("destination")) {
-      auto& d = j["destination"];
-      scene.destination_label = d.value("label", "");
-      if (d.contains("centroid")) {
-        scene.destination_centroid = {
-          d["centroid"][0], d["centroid"][1], d["centroid"][2]};
-      }
-    }
+    parse_object_geometry(j, "target",      scene.target,      scene.target_label);
+    parse_object_geometry(j, "destination", scene.destination, scene.destination_label);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("bt_executor"),
       "parse_world_map_result failed: %s", e.what());
@@ -116,6 +129,12 @@ static void parse_grounding_result(const std::string& raw,
       spec.reference_label  = d.value("reference_label", "");
       spec.relation         = d.value("relation", "");
       spec.region           = d.value("region", "");
+      scene.has_destination = true;
+    } else {
+      // Pick-only. Without this the previous command's destination stays live:
+      // place the book in the box, then "pick up the cup" → still to the box.
+      spec.clear();
+      scene.has_destination = false;
     }
     scene.grounding_result_fresh = true;
   } catch (const std::exception& e) {
@@ -166,7 +185,9 @@ int main(int argc, char** argv)
   auto ee_link         = node->declare_parameter<std::string>("end_effector_link","panda_link8");
   auto planning_frame  = node->declare_parameter<std::string>("planning_frame",  "panda_link0");
   auto move_action_srv = node->declare_parameter<std::string>("move_action",     "/run_hybrid_planning");
-  auto move_home_srv   = node->declare_parameter<std::string>("move_home_action","/move_action");
+  // Declared but unused: joint-space goals go through the hybrid planner now.
+  // move_group is never launched, so /move_action has no server.
+  node->declare_parameter<std::string>("move_home_action", "/move_action");
   auto gripper_srv     = node->declare_parameter<std::string>("gripper_action",  "/gripper_command");
 
   auto pos_tol         = node->declare_parameter<double>("position_tolerance",    0.01);
@@ -180,6 +201,7 @@ int main(int argc, char** argv)
   auto target_radius   = node->declare_parameter<double>("target_search_radius_m",0.25);
   auto target_staleness= node->declare_parameter<double>("target_staleness_sec",  1.0);
   auto dest_radius     = node->declare_parameter<double>("dest_match_radius_m",   0.3);
+  auto bt_models_out   = node->declare_parameter<std::string>("bt_models_out",    "");
 
   // "ready" state for MoveToHome
   auto home_joint_names = node->declare_parameter<std::vector<std::string>>(
@@ -189,6 +211,27 @@ int main(int argc, char** argv)
   auto home_joint_values = node->declare_parameter<std::vector<double>>(
     "home_joint_values", {0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785});
   auto home_joint_tol = node->declare_parameter<double>("home_joint_tolerance", 0.05);
+  // Much tighter than home: OMPL terminates as soon as it is inside the goal
+  // constraint, so the tolerance IS the pose error. At 0.05 rad the arm can
+  // settle ~3 degrees per joint away from the latched pose, which puts the EE
+  // camera a couple of centimetres off and invalidates the static extrinsics.
+  // Recovery has no such requirement, so it keeps the loose value.
+  auto obs_joint_tol = node->declare_parameter<double>(
+    "observation_joint_tolerance", 0.005);
+
+  // Observation pose — the configuration camera_extrinsics.yaml was captured
+  // at, which is where the scene loads and therefore where every scan is taken
+  // from. NOT the Panda "ready" state: a scan from anywhere else is silently
+  // projected to wrong world coordinates rather than failing.
+  //
+  // Empty (the default) = ParseScene latches it from the FIRST scan instead:
+  // whatever configuration the arm was in when the pipeline looked at the
+  // scene is, by definition, the pose that scan is valid from. That holds
+  // however the arm got there, which latching at node startup did not — a BT
+  // restarted after the arm had moved latched wherever it happened to be.
+  auto obs_joint_values = node->declare_parameter<std::vector<double>>(
+    "observation_joint_values", std::vector<double>{});
+  const bool latch_observation = obs_joint_values.empty();
 
   // Place pose geometry
   bt_pkg::PlacePoseParams place_params;
@@ -196,6 +239,8 @@ int main(int argc, char** argv)
   place_params.place_height_m   = node->declare_parameter<double>("place_height_m",   0.05);
   place_params.container_drop_z = node->declare_parameter<double>("container_drop_z", 0.03);
   place_params.near_offset_m    = node->declare_parameter<double>("near_offset_m",    0.08);
+  place_params.near_clearance_m = node->declare_parameter<double>("near_clearance_m", 0.05);
+  place_params.keep_grasp_yaw   = node->declare_parameter<bool>("place_keep_grasp_yaw", true);
 
   // ── Shared state ──────────────────────────────────────────────────────────
   auto scene = std::make_shared<bt_pkg::SceneData>();
@@ -277,10 +322,6 @@ int main(int argc, char** argv)
   params_move.nh = node;
   params_move.default_port_value = move_action_srv;
 
-  BT::RosNodeParams params_home;
-  params_home.nh = node;
-  params_home.default_port_value = move_home_srv;
-
   BT::RosNodeParams params_gripper;
   params_gripper.nh = node;
   params_gripper.default_port_value = gripper_srv;
@@ -295,14 +336,17 @@ int main(int argc, char** argv)
 
   factory.registerBuilder<bt_pkg::ParseScene>(
     "ParseScene",
-    [scene, pre_grasp_z, retreat_z](const std::string& n, const BT::NodeConfig& c) {
-      return std::make_unique<bt_pkg::ParseScene>(n, c, scene, pre_grasp_z, retreat_z);
+    [scene, home_joint_names, latch_observation](
+      const std::string& n, const BT::NodeConfig& c)
+    {
+      return std::make_unique<bt_pkg::ParseScene>(
+        n, c, scene, home_joint_names, latch_observation);
     });
 
   factory.registerBuilder<bt_pkg::SelectGraspCandidate>(
     "SelectGraspCandidate",
-    [pre_grasp_z](const std::string& n, const BT::NodeConfig& c) {
-      return std::make_unique<bt_pkg::SelectGraspCandidate>(n, c, pre_grasp_z);
+    [pre_grasp_z, retreat_z](const std::string& n, const BT::NodeConfig& c) {
+      return std::make_unique<bt_pkg::SelectGraspCandidate>(n, c, pre_grasp_z, retreat_z);
     });
 
   factory.registerBuilder<bt_pkg::MoveAction>(
@@ -315,14 +359,29 @@ int main(int argc, char** argv)
         planning_group, ee_link, planning_frame, pos_tol, ori_tol);
     });
 
-  factory.registerBuilder<bt_pkg::MoveToHome>(
+  // Same class, two registrations — recovery parks at home, end-of-cycle
+  // returns to the extrinsics capture pose. Both go through the hybrid planner
+  // (params_move), the only planner this launch actually starts.
+  factory.registerBuilder<bt_pkg::MoveToJointGoal>(
     "MoveToHome",
-    [params_home, scene, planning_group, home_joint_names, home_joint_values, home_joint_tol](
+    [params_move, scene, planning_group, home_joint_names, home_joint_values, home_joint_tol](
       const std::string& n, const BT::NodeConfig& c)
     {
-      return std::make_unique<bt_pkg::MoveToHome>(
-        n, c, params_home, scene,
-        planning_group, home_joint_names, home_joint_values, home_joint_tol);
+      return std::make_unique<bt_pkg::MoveToJointGoal>(
+        n, c, params_move, scene,
+        planning_group, home_joint_names, home_joint_values, home_joint_tol,
+        "MoveToHome");
+    });
+
+  factory.registerBuilder<bt_pkg::MoveToJointGoal>(
+    "MoveToObservation",
+    [params_move, scene, planning_group, home_joint_names, obs_joint_values, obs_joint_tol](
+      const std::string& n, const BT::NodeConfig& c)
+    {
+      return std::make_unique<bt_pkg::MoveToJointGoal>(
+        n, c, params_move, scene,
+        planning_group, home_joint_names, obs_joint_values, obs_joint_tol,
+        "MoveToObservation");
     });
 
   factory.registerBuilder<bt_pkg::GripperAction>(
@@ -333,8 +392,11 @@ int main(int argc, char** argv)
 
   factory.registerBuilder<bt_pkg::UpdateTargetPose>(
     "UpdateTargetPose",
-    [scene, place_params, dest_radius](const std::string& n, const BT::NodeConfig& c) {
-      return std::make_unique<bt_pkg::UpdateTargetPose>(n, c, scene, place_params, dest_radius);
+    [scene, place_params, dest_radius, retreat_z](
+      const std::string& n, const BT::NodeConfig& c)
+    {
+      return std::make_unique<bt_pkg::UpdateTargetPose>(
+        n, c, scene, place_params, dest_radius, retreat_z);
     });
 
   factory.registerBuilder<bt_pkg::RequestReplan>(
@@ -349,6 +411,12 @@ int main(int argc, char** argv)
     "EmergencyStopClear",
     [scene](const std::string& n, const BT::NodeConfig& c) {
       return std::make_unique<bt_pkg::EmergencyStopClear>(n, c, scene);
+    });
+
+  factory.registerBuilder<bt_pkg::HasDestinationCentroid>(
+    "HasDestinationCentroid",
+    [](const std::string& n, const BT::NodeConfig& c) {
+      return std::make_unique<bt_pkg::HasDestinationCentroid>(n, c);
     });
 
   factory.registerBuilder<bt_pkg::TargetVisible>(
@@ -372,10 +440,20 @@ int main(int argc, char** argv)
     "Blackboard: max_grasp_candidates=%ld  bt_pick_retries=%ld",
     max_grasp_cands, bt_pick_retries);
   
-  // Optional: write the tree structure to an XML file for visualization/debugging. (Groot2)
-  std::ofstream("/home/hj1/robot_capstone/ros_pkgs/src/bt_pkg/behavior_trees/bt_models.xml")
-    << BT::writeTreeNodesModelXML(factory);
-    
+  // Groot2 node-model dump. Off unless a path is given — this was a hardcoded
+  // absolute home-directory path, silently writing nowhere on other machines.
+  if (!bt_models_out.empty()) {
+    std::ofstream out(bt_models_out);
+    if (out) {
+      out << BT::writeTreeNodesModelXML(factory);
+      RCLCPP_INFO(node->get_logger(), "Groot2 node models → %s", bt_models_out.c_str());
+    } else {
+      RCLCPP_WARN(node->get_logger(),
+        "bt_models_out '%s' is not writable — skipping", bt_models_out.c_str());
+    }
+  }
+
+
   // ── Tick timer (10 Hz) ───────────────────────────────────────────────────
   auto tick_timer = node->create_wall_timer(
     std::chrono::milliseconds(100),

@@ -31,11 +31,12 @@ add_executable(bt_executor_node
   src/action_nodes/parse_scene.cpp
   src/action_nodes/select_grasp_candidate.cpp
   src/action_nodes/move_action.cpp
-  src/action_nodes/move_to_home.cpp
+  src/action_nodes/move_to_joint_goal.cpp
   src/action_nodes/gripper_action.cpp
   src/action_nodes/update_target_pose.cpp
   src/action_nodes/request_replan.cpp
   src/condition_nodes/emergency_stop_clear.cpp
+  src/condition_nodes/has_destination_centroid.cpp
   src/condition_nodes/target_visible.cpp
 )
 
@@ -89,5 +90,24 @@ install(DIRECTORY
 install(DIRECTORY include/
   DESTINATION include
 )
+
+# ── tests ────────────────────────────────────────────────────────────────────
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  # compute_place_pose is pure geometry — no ROS graph needed.
+  ament_add_gtest(test_destination_calculator
+    test/test_destination_calculator.cpp
+    src/destination_calculator.cpp
+  )
+  target_include_directories(test_destination_calculator PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_destination_calculator
+    geometry_msgs
+    rclcpp
+    sensor_msgs
+  )
+endif()
 
 ament_package()
