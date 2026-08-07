@@ -6,8 +6,14 @@ label_map.py.
 Subscribes
   /qwen/source_image           sensor_msgs/Image   **TRIGGER**
   /qwen/labeled_detections     std_msgs/String     cached
-  <ee_camera_info_topic>       sensor_msgs/CameraInfo  cached — gives the depth
+  <camera_info_topic>          sensor_msgs/CameraInfo  cached — gives the depth
                                                    resolution the mask must match
+
+Two instances of this node run in the dual-view pipeline, differing only in
+parameters: one segments the wrist frame against the EE depth resolution and
+publishes /sam/mask_image, the other segments the overhead frame against the TOP
+depth resolution and publishes /sam/top/mask_image. Nothing here is view-aware —
+keep it that way.
 
 Publishes
   /sam/mask_image              sensor_msgs/Image   mono8 label map, latched
@@ -62,6 +68,11 @@ class SamMaskNode(Node):
 
         self.declare_parameter("source_image_topic", "/qwen/source_image")
         self.declare_parameter("detections_topic", "/qwen/labeled_detections")
+        # View-neutral name: a second instance of this node segments the OVERHEAD
+        # frame and must size its label map to the TOP depth image. The old
+        # ee_camera_info_topic is still honoured when this is left empty so
+        # existing launches and demo/05 keep working unchanged.
+        self.declare_parameter("camera_info_topic", "")
         self.declare_parameter("ee_camera_info_topic", "/ee_rgbd_camera/camera_info")
         self.declare_parameter("mask_topic", "/sam/mask_image")
         self.declare_parameter("annotated_topic", "/sam/annotated_image")
@@ -101,9 +112,9 @@ class SamMaskNode(Node):
         self.create_subscription(
             String, self.get_parameter("detections_topic").value,
             self._detections_cb, 10)
-        self.create_subscription(
-            CameraInfo, self.get_parameter("ee_camera_info_topic").value,
-            self._info_cb, 10)
+        info_topic = (self.get_parameter("camera_info_topic").value
+                      or self.get_parameter("ee_camera_info_topic").value)
+        self.create_subscription(CameraInfo, info_topic, self._info_cb, 10)
         self.create_subscription(
             Image, self.get_parameter("source_image_topic").value,
             self._image_cb, 1)
@@ -124,7 +135,10 @@ class SamMaskNode(Node):
         self.get_logger().info(
             f"sam_mask_node ready — server "
             f"{self.get_parameter('zmq_host').value}:"
-            f"{self.get_parameter('zmq_port').value}")
+            f"{self.get_parameter('zmq_port').value}; "
+            f"trigger={self.get_parameter('source_image_topic').value} "
+            f"size_from={info_topic} "
+            f"mask={self.get_parameter('mask_topic').value}")
 
     # ── callbacks ────────────────────────────────────────────────────────────
 

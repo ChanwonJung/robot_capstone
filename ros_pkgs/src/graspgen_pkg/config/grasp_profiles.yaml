@@ -1,0 +1,95 @@
+# grasp_profiles.yaml — per-object force_top_down tuning, selected at runtime
+# from the TARGET label the Slow Brain grounded.
+#
+# WHY THIS FILE EXISTS
+#   force_top_down_grasp_z_frac / _z_offset are the fingertip height along the
+#   restored TARGET cloud, and the right value depends on the object's shape:
+#   a sphere must be gripped below its equator or the pads ride up and it squirts
+#   out, while a cup must be gripped near the rim because its walls are the only
+#   thing there is to hold. One launch default cannot serve both, so these used
+#   to be typed on the command line for every run — and forgetting one silently
+#   reproduced a failure that looks like a perception bug.
+#
+#   Now graspgen_node matches the TARGET label against `match` below and applies
+#   the profile for that scan. Nothing else changes per object, so a plain
+#   `ros2 launch graspgen_pkg graspgen.launch.py` is enough for every target.
+#
+# MATCHING
+#   Case-insensitive substring match against the TARGET detection's text, the
+#   same way _is_transparent_target() matches transparent_labels. The VLM emits
+#   free-form labels ("red sphere", "red apple", "white cylinder"), so match on
+#   keywords rather than exact names. FIRST profile that matches wins — put the
+#   specific ones above the general ones.
+#
+#   The matched text includes BOTH names the Slow Brain carries: `label` (what
+#   the VLM sees — "white cylinder") and `target_label` (what the operator asked
+#   for — "glass cup"). Matching on the visual label alone missed the glass cup
+#   entirely, which also disabled its depth restoration.
+#
+#   No match -> `default`, which is the launch-argument value, unchanged.
+#
+# OVERRIDING
+#   An explicit launch argument does NOT win over a matched profile; set
+#   use_grasp_profiles:=false to go back to pure launch arguments. The node logs
+#   every substitution it makes, so a surprising grasp height is one grep away.
+
+profiles:
+  # Transparent, thin-walled, gripped at the rim. Same keyword set as
+  # transparent_labels so depth restoration and grasp height agree on what a
+  # cup is. z_frac 0.65 = upper body; verified on the 68x100 mm glass cup.
+  - name: transparent_vessel
+    match: [glass, cup, mug, bottle, wine, transparent, tumbler]
+    z_frac: 0.65
+    z_offset: 0.0
+    xy_anchor: extent
+
+  # Apple: sphere-like but slightly squat, and the stem biases the cloud top.
+  # Verified 2026-08-03.
+  - name: apple
+    match: [apple]
+    z_frac: 0.45
+    z_offset: -0.020
+    xy_anchor: extent
+
+  # Book. Stands on its long edge (104.3 mm tall, 26.6 mm thick, 171.5 mm long
+  # — collider box in setup_initial_scene.py). The EE camera only ever sees the
+  # top edge, so the TARGET cloud is a flat sheet at the top face and
+  # z_top - z_bot collapses to 0. That makes z_frac meaningless, so anchor on
+  # z_top (z_frac 1.0) and let z_offset alone set the depth: the fingertips
+  # must drop 30 mm down the side or the pads close above the book and grip
+  # nothing. 30 mm keeps the hand body clear of the top face while leaving the
+  # pad's contact area on the cover.
+  #
+  # align_tilt: 책은 똑바로 서 있지 않다. 실측(world_map_396.ply, TARGET
+  # 6040점 3D PCA)에서 표지 법선이 수평에서 7.5°, 높이축이 수직에서 8.2°
+  # 기울어 있었다. 접근축을 수직으로 고정하면 패드가 표지와 어긋나 모서리
+  # 로만 닿는다. 켜면 접근축을 책 높이축에, 폐쇄축을 표지 법선에 맞춘다.
+  # 회전 대칭 물체에는 켜지 말 것 — 기울일 이유도 없고, 평판이 아닌
+  # 클라우드에서 최소분산축을 법선으로 믿으면 엉뚱한 자세가 나온다.
+  - name: book
+    match: [book, notebook, magazine]
+    z_frac: 1.0
+    # -0.030 → -0.050: 책 무게중심은 z≈0.052 (높이 104.3mm 의 절반) 인데
+    # -0.030 이면 패드 중심이 z≈0.085 로 무게중심보다 33mm 위였다. 들자마자
+    # 진자가 되어 흔들린다. -0.050 이면 패드 중심 z≈0.065 로 13mm 까지 줄고,
+    # 핸드 본체는 손끝+103mm = 0.157 이라 책 윗면(0.104) 위에 여유롭게 남는다.
+    z_offset: -0.050
+    xy_anchor: extent
+    align_tilt: true
+
+  # Spheres. The fingertips must sit BELOW the equator: the cloud only covers
+  # the camera-facing cap, so z_frac alone lands the pads above the widest point
+  # and the ball squeezes downward out of the jaws. Verified 2026-08-03 on the
+  # 68 mm red ball.
+  - name: sphere
+    match: [ball, sphere, orange, tomato]
+    z_frac: 0.45
+    z_offset: -0.025
+    xy_anchor: extent
+
+# Applied when nothing matches. Mirrors the launch defaults so an unknown object
+# behaves exactly as it did before this file existed.
+default:
+  z_frac: 0.65
+  z_offset: 0.0
+  xy_anchor: extent

@@ -33,21 +33,42 @@
     #   absolute        — already original-image pixels
     #   normalized_1000 — 0..1000 grid (common for the Qwen-VL family)
     #   normalized_1    — 0..1 floats
-    # VERIFY EMPIRICALLY. Wrong values segment confidently incorrect regions
-    # with no error anywhere downstream:
-    #   python3 qwen_a100/qwen_cli.py --image demo/resources/ee_raw.png \
-    #     --instruction "pick the book" --annotate /tmp/boxes.png
-    bbox_convention: "absolute"
+    # VERIFIED 2026-08-04 against qwen35-local (Qwen3.5-27B) on a 640x480 EE
+    # frame: the model returns a 0-1000 grid. It had been "absolute", and the
+    # failure was invisible — y values up to 994 were clamped to 479, every box
+    # collapsed to zero area, clamp_boxes dropped them all, and the node just
+    # said "no TARGET found ... Detected: []" while target_label and destination
+    # came back perfectly correct. Re-verify if the served model changes:
+    #   python3 qwen_a100/qwen_cli.py --image demo/resources/scene1_ee_rgb.png \
+    #     --instruction "pick up the apple" --annotate /tmp/boxes.png
+    bbox_convention: "normalized_1000"
 
     # ── Topics ───────────────────────────────────────────────────────────────
     image_topic: "/ee_camera/image_raw"
 
-    # Offline test: point at a file to bypass image_topic entirely.
+    # ── Dual view ────────────────────────────────────────────────────────────
+    # Empty disables it: one grounding pass on the wrist camera, exactly as
+    # before. Set it to the overhead RGB topic and the node grounds both frames
+    # CONCURRENTLY, splitting the roles:
+    #     wrist -> TARGET        overhead -> DESTINATION
+    # This is not an optimisation, it is a requirement for placing: the wrist
+    # camera's near limit on the table is x ~ 0.58 m in panda_link0 while the
+    # basket sits at x = 0.48, so the destination is simply not in that frame —
+    # and mask_projection_pkg only assigns categories from EE depth. Without the
+    # overhead pass /world_map_result can never carry a destination centroid.
+    top_image_topic: "/camera/image_raw"
+
+    # Offline test: point at a file to bypass the matching topic entirely.
     #   ros2 launch qwen_a100 qwen_a100.launch.py image_path:=$PWD/demo/resources/ee_raw.png
     image_path: ""
+    top_image_path: ""
     detections_topic: "/qwen/labeled_detections"
     grounding_topic: "/qwen/grounding_result"
     source_image_topic: "/qwen/source_image"
+    # Consumed by the SECOND sam_mask_node instance, the one sized to the top
+    # depth image.
+    top_detections_topic: "/qwen/top/labeled_detections"
+    top_source_image_topic: "/qwen/top/source_image"
 
     # Seed instruction — leave empty to wait for /user_instruction.
     # Useful for headless replay without the xterm prompt.

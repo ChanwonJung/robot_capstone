@@ -27,9 +27,14 @@
     mask_topic:         "/sam/mask_image"
     annotated_topic:    "/sam/annotated_image"
 
-    # The label map MUST match the EE DEPTH resolution, which the projector
-    # uses to index it. Read from CameraInfo at runtime; override only if the
-    # camera_info topic is unavailable.
+    # The label map MUST match the DEPTH resolution of the view being
+    # segmented, which the projector uses to index it. Read from CameraInfo at
+    # runtime; override only if the camera_info topic is unavailable.
+    #
+    # camera_info_topic is the view-neutral name and wins when non-empty — the
+    # overhead instance sets it to the TOP camera_info. ee_camera_info_topic is
+    # the fallback so existing launches keep working unchanged.
+    camera_info_topic: ""
     ee_camera_info_topic: "/ee_rgbd_camera/camera_info"
     mask_width:  0      # 0 = take it from CameraInfo
     mask_height: 0

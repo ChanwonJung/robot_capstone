@@ -57,4 +57,19 @@ private:
   double staleness_sec_;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HasDestinationCentroid
+// Place-phase gate. Reads the blackboard flag ParseScene sets.
+// Keys on the measured CENTROID, not destination_spec — "put it in the box"
+// with no box in view populates the spec but leaves the centroid absent, and a
+// spec-keyed guard would then place at {0,0,0}, the robot's own base.
+// ─────────────────────────────────────────────────────────────────────────────
+class HasDestinationCentroid : public BT::ConditionNode {
+public:
+  HasDestinationCentroid(const std::string& name, const BT::NodeConfig& config);
+
+  static BT::PortsList providedPorts() { return {}; }
+  BT::NodeStatus tick() override;
+};
+
 }  // namespace bt_pkg

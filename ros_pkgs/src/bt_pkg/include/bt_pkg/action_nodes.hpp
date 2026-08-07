@@ -49,32 +49,36 @@ class ParseScene : public BT::SyncActionNode {
 public:
   ParseScene(const std::string& name, const BT::NodeConfig& config,
              std::shared_ptr<SceneData> scene,
-             double pre_grasp_z_offset, double retreat_z_offset);
+             const std::vector<std::string>& arm_joint_names,
+             bool latch_observation_pose);
 
   static BT::PortsList providedPorts() { return {}; }
   BT::NodeStatus tick() override;
 
 private:
+  void latch_observation_pose();  // call with scene_->mtx held
+
   std::shared_ptr<SceneData> scene_;
-  double pre_grasp_z_offset_;
-  double retreat_z_offset_;
+  std::vector<std::string>   arm_joint_names_;
+  bool latch_observation_pose_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SelectGraspCandidate
-// Reads grasp_index from blackboard, sets pre_grasp_pose + grasp_pose,
-// increments index. Returns FAILURE when all candidates are exhausted.
+// Reads grasp_index from blackboard, sets pre_grasp_pose, grasp_pose and
+// retreat_pose, increments index. Returns FAILURE when candidates run out.
 // ─────────────────────────────────────────────────────────────────────────────
 class SelectGraspCandidate : public BT::SyncActionNode {
 public:
   SelectGraspCandidate(const std::string& name, const BT::NodeConfig& config,
-                       double pre_grasp_z_offset);
+                       double pre_grasp_z_offset, double retreat_z_offset);
 
   static BT::PortsList providedPorts() { return {}; }
   BT::NodeStatus tick() override;
 
 private:
   double pre_grasp_z_offset_;
+  double retreat_z_offset_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,26 +139,36 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MoveToHome
-// Wraps moveit_msgs/MoveGroup action. Sends the Panda "ready" joint state.
-// Used only in recovery paths (no obstacle avoidance needed).
+// MoveToJointGoal
+// Joint-space goal through the hybrid planner. Registered twice, under
+// "MoveToHome" (recovery) and "MoveToObservation" (end of cycle), with
+// different joint values.
+//
+// Joint-space, not Cartesian, on purpose: MoveIt samples pose-goal IK from a
+// random seed, and a twisted branch that happens to reach the same EE pose puts
+// the arm in a different configuration. The observation pose has to be the
+// EXACT configuration camera_extrinsics.yaml was captured at.
+//
+// This used to target move_group's /move_action, which hybrid_planning.launch.py
+// never starts — so it failed on every tick and Pick Recovery was inert.
 // ─────────────────────────────────────────────────────────────────────────────
-class MoveToHome
-  : public BT::RosActionNode<moveit_msgs::action::MoveGroup>
+class MoveToJointGoal
+  : public BT::RosActionNode<moveit_msgs::action::HybridPlanner>
 {
 public:
-  using MoveGroup = moveit_msgs::action::MoveGroup;
+  using HybridPlanner = moveit_msgs::action::HybridPlanner;
 
-  MoveToHome(const std::string& name, const BT::NodeConfig& config,
-             const BT::RosNodeParams& params,
-             std::shared_ptr<SceneData> scene,
-             const std::string& planning_group,
-             const std::vector<std::string>& joint_names,
-             const std::vector<double>& joint_values,
-             double joint_tolerance);
+  MoveToJointGoal(const std::string& name, const BT::NodeConfig& config,
+                  const BT::RosNodeParams& params,
+                  std::shared_ptr<SceneData> scene,
+                  const std::string& planning_group,
+                  const std::vector<std::string>& joint_names,
+                  const std::vector<double>& joint_values,
+                  double joint_tolerance,
+                  const std::string& label);
 
   static BT::PortsList providedPorts() {
-    return BT::RosActionNode<MoveGroup>::providedBasicPorts({
+    return BT::RosActionNode<HybridPlanner>::providedBasicPorts({
       BT::InputPort<double>("speed", 0.5, "max_velocity_scaling_factor"),
     });
   }
@@ -165,11 +179,15 @@ public:
   void           onHalt()                                    override {}
 
 private:
+  double goal_residual(const std::vector<double>& target) const;
+
   std::shared_ptr<SceneData> scene_;
   std::string planning_group_;
   std::vector<std::string> joint_names_;
-  std::vector<double>      joint_values_;
+  std::vector<double>      joint_values_;  // empty = use the latched observation pose
   double joint_tolerance_;
+  std::string label_;
+  std::vector<double> last_target_;  // what setGoal actually commanded
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,15 +220,17 @@ public:
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UpdateTargetPose
-// Reads destination_spec from blackboard + live yolo_objects from SceneData.
-// Computes place_pose and writes it to the blackboard.
+// Reads destination_spec / destination_geometry / target_geometry / grasp_pose
+// from the blackboard plus live yolo_objects from SceneData, and writes
+// place_pose and post_place_pose (the lift-off after releasing).
 // ─────────────────────────────────────────────────────────────────────────────
 class UpdateTargetPose : public BT::SyncActionNode {
 public:
   UpdateTargetPose(const std::string& name, const BT::NodeConfig& config,
                    std::shared_ptr<SceneData> scene,
                    const PlacePoseParams& params,
-                   double dest_match_radius_m);
+                   double dest_match_radius_m,
+                   double retreat_z_offset);
 
   static BT::PortsList providedPorts() { return {}; }
   BT::NodeStatus tick() override;
@@ -219,6 +239,7 @@ private:
   std::shared_ptr<SceneData> scene_;
   PlacePoseParams params_;
   double dest_match_radius_m_;
+  double retreat_z_offset_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

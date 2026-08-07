@@ -15,7 +15,10 @@ bt_executor_node:
     orientation_tolerance: 0.05   # rad
 
     # Approach and retreat heights above the grasp pose
-    pre_grasp_z_offset: 0.12  # m — lifted pose sent before descending to grasp
+    # NOTE: bt_system.launch.py overrides this with its pre_grasp_z_offset
+    # argument (default 0.03). This value only applies when the node is run
+    # directly with just this params file.
+    pre_grasp_z_offset: 0.12  # m — retracted pose sent before moving to grasp
     retreat_z_offset:   0.15  # m — lifted pose sent after grasping
 
     # TargetVisible thresholds
@@ -26,13 +29,31 @@ bt_executor_node:
     dest_match_radius_m: 0.3   # m — max distance to match YOLO object to initial centroid
 
     # Panda home tolerance (joint names + values come from robot_defaults.yaml)
-    home_joint_tolerance: 0.05  # rad
+    home_joint_tolerance: 0.05  # rad — recovery only, accuracy does not matter
 
-    # Place pose geometry (destination_calculator.cpp)
+    # Observation-pose tolerance. OMPL stops as soon as it is inside the goal
+    # constraint, so this value IS the pose error: at 0.05 the arm settles ~3°
+    # per joint off the latched pose, which moves the EE camera enough to
+    # invalidate the static extrinsics.
+    observation_joint_tolerance: 0.005  # rad (~0.3°)
+
+    # Place pose geometry (destination_calculator.cpp).
+    # Heights describe the RELEASED OBJECT'S UNDERSIDE, not the link8 pose —
+    # the object's half-height and how high link8 rides above its centre are
+    # both measured from the scan and added on. So one clearance value means
+    # the same thing for a book and for a cup.
     side_offset_m:    0.08   # XY offset for left_of / right_of / in_front_of / behind
-    place_height_m:   0.05   # Z above destination centroid
-    container_drop_z: 0.03   # Z above container centroid
-    near_offset_m:    0.08   # XY offset for "near"
+    place_height_m:   0.05   # clearance above the destination's top / support surface
+    container_drop_z: 0.03   # clearance above the container's RIM (bbox_3d_world.max.z)
+    near_offset_m:    0.08   # minimum radial offset for "near"
+    near_clearance_m: 0.05   # gap between the two XY footprints for "near"
+
+    # Keep the pick's yaw so the wrist doesn't twist the held object in transit.
+    # false = fixed straight-down, for when a place is unreachable.
+    place_keep_grasp_yaw: true
+
+    # Groot2 node-model dump. Empty = disabled.
+    bt_models_out: ""
 
 
 hazard_level_translator_node:
@@ -47,7 +68,15 @@ hazard_level_translator_node:
 
 yolo_world_map_node:
   ros__parameters:
-    # extrinsics_config, depth_topic, camera_info_topic come from robot_defaults.yaml
+    # extrinsics_config comes from the launch argument.
+    #
+    # depth_topic / camera_info_topic are set HERE, not in robot_defaults.yaml:
+    # that file names them top_depth_topic / top_camera_info_topic, and ROS 2
+    # silently ignores YAML keys that do not match a declared parameter — so the
+    # old "comes from robot_defaults" comment was wrong and this node ran on its
+    # own (non-existent) defaults.
+    depth_topic:        "/rgbd_camera/depth_image"
+    camera_info_topic:  "/rgbd_camera/camera_info"
 
     # YOLO topic to consume (top camera only — wide field of view)
     detections_topic:   "/yolo_hazard/top/detections_json"

@@ -380,6 +380,27 @@ def iter_collision_prims(root_prim):
             yield prim
 
 
+def set_double_sided(root_prim):
+    """Render both faces of every mesh in the subtree.
+
+    UsdGeomGprim.doubleSided defaults to FALSE, and the imported assets do not
+    author it. Any mesh whose winding came out inverted in the GLB -> USD
+    conversion then has its outward faces culled, so you see straight through
+    the near wall into the interior.
+
+    This is not cosmetic: a culled face writes no depth either, so the top
+    camera measures the surface BEHIND the wall. For the basket that corrupts
+    bbox_3d_world.max.z, which is the rim height the place pose is built on.
+    """
+    count = 0
+    for prim in Usd.PrimRange(root_prim):
+        gprim = UsdGeom.Gprim(prim)
+        if gprim:
+            gprim.CreateDoubleSidedAttr().Set(True)
+            count += 1
+    return count
+
+
 def apply_static_collider(root_prim, approximation="convexHull"):
     for prim in iter_collision_prims(root_prim):
         UsdPhysics.CollisionAPI.Apply(prim)
@@ -399,6 +420,11 @@ def create_dynamic_body_root(stage, path, translate, mass):
     physx_rigid_body.CreateLinearDampingAttr(0.05)
     physx_rigid_body.CreateSleepThresholdAttr(0.0)
     physx_rigid_body.CreateStabilizationThresholdAttr(0.0)
+    # Continuous collision detection. The basket collider is a triangle mesh,
+    # which has zero thickness — a discrete step large enough to straddle a wall
+    # passes through it. An object dropped into the basket reaches ~0.8 m/s,
+    # i.e. ~13 mm per substep, which is the same order as the wall geometry.
+    physx_rigid_body.CreateEnableCCDAttr(True)
     mass_api = UsdPhysics.MassAPI.Apply(root)
     mass_api.CreateMassAttr(float(mass))
     return root
@@ -550,12 +576,23 @@ def build_basket(stage, path):
         rotate_xyz_deg=BASKET_ROTATION_DEG,
     )
     if BASKET_ASSET.exists():
-        add_visual_reference(
+        visual = add_visual_reference(
             stage,
             f"{path}/Visual",
             BASKET_ASSET,
             scale=BASKET_SCALE,
         )
+        # The basket had NO collider at all — visual geometry only — so anything
+        # placed in it fell straight through to the table.
+        #
+        # approximation="none" (exact triangle mesh) rather than the convexHull
+        # default: a convex hull caps the opening, so the object would rest on
+        # top of the rim instead of going inside. Triangle-mesh colliders are
+        # static-only in PhysX, which is fine — the basket is a static prop with
+        # no RigidBodyAPI. Same reasoning as the table-top fix below.
+        apply_static_collider(visual, approximation="none")
+        n = set_double_sided(visual)
+        print(f"[basket] triangle-mesh collider + doubleSided on {n} gprim(s)")
     return root
 
 
@@ -874,8 +911,24 @@ def _bind_physics_material(target_prim, material_prim):
 # 12N 근거: 필요한 건 컵을 놓치지 않을 만큼이지 최대 악력이 아니다.
 # μ=4 이므로 마찰 = 12×4 = 48N, 컵 무게 1.8N 의 26배 여유. 원래 문제였던 기본값
 # 7.2N 보다는 67% 강해 조임 부족(51.4mm 정지)도 재발하지 않는다.
+#
+# ── stiffness 5000 → 1000 (2026-08-06) ───────────────────────────────────────
+# stiffness 는 여기서 힘을 전혀 늘리지 못한다. 힘 = min(stiffness × 오차,
+# maxForce) 인데 오차가 항상 크기 때문이다:
+#   책   손가락 13.3mm → 12N 포화에 필요한 stiffness =  902 N/m
+#   컵·사과·공  34mm  →                              353 N/m
+# 즉 1000 이면 전부 maxForce 에 포화한다. 5000 이 실제로 바꾸는 건 닫는 속도
+# 뿐이다 — 종단 속도 ≈ (stiffness/damping) × 이동거리 이므로 책에서
+#   5000/1000 × 26.7mm = 134 mm/s   →   1000/1000 × 26.7mm = 27 mm/s
+# 로 5배 느려진다. damping 은 일부러 1000 으로 유지한다(비를 5→1 로 낮춰야
+# 속도가 준다).
+#
+# 증상: 테이블에 자립한 책(104mm 높이, 26.6mm 두께, 0.15kg)을 윗부분에서 물 때
+# 양쪽 손가락이 시차를 두고 134mm/s 로 때려 책이 밀리고 계속 떨렸다. 심하면
+# 하강 중 손가락에 걸려 넘어졌다. 무게는 원인이 아니다 — 필요 압축력은
+# 1.47N/(2×4) = 0.18N 인데 12N 을 걸고 있었다(65배).
 FINGER_JOINT_NAMES = ("panda_finger_joint1", "panda_finger_joint2")
-GRIPPER_DRIVE_STIFFNESS = 5000.0
+GRIPPER_DRIVE_STIFFNESS = 1000.0  # 5000 → 1000, 위 주석 참조
 GRIPPER_DRIVE_DAMPING   = 1000.0
 GRIPPER_DRIVE_MAX_FORCE = 12.0    # 50.0 → 12.0, 위 주석 참조
 
@@ -914,6 +967,36 @@ def boost_gripper_drive(stage):
         print("[gripper-drive] 손가락 조인트를 찾지 못함 — 변경 없음")
 
 
+# PhysX gives a contact ZERO torsional friction by default
+# (torsionalPatchRadius = 0), so nothing resists rotation about the contact
+# normal. Two flat pads pinching a face therefore let the object spin freely
+# about the pinch axis — a real rubber pad deforms into a patch and does resist
+# it. That is what made the book swing and hang off the fingertips after the
+# lift: friction alone cannot stop rotation (μ 4.0 × 12N = 96N of grip against a
+# 1.47N book is never the limit), only a patch can.
+#
+# minTorsionalPatchRadius forces a floor on the patch even when the geometric
+# contact computes to a line or point. Torsional capacity ≈ μ × N × radius =
+# 4 × 12 × 0.008 = 0.38 N·m, against a worst-case gravity torque of
+# 1.47N × 85mm (grip at the very end of the 171.5mm book) = 0.125 N·m.
+GRIPPER_TORSIONAL_PATCH_M = 0.008
+
+
+def _apply_torsional_patch(target_prim):
+    """Give the finger colliders a minimum torsional friction patch."""
+    applied = 0
+    for prim in Usd.PrimRange(target_prim):
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        physx_col = PhysxSchema.PhysxCollisionAPI.Apply(prim)
+        physx_col.CreateMinTorsionalPatchRadiusAttr().Set(
+            GRIPPER_TORSIONAL_PATCH_M)
+        physx_col.CreateTorsionalPatchRadiusAttr().Set(
+            GRIPPER_TORSIONAL_PATCH_M)
+        applied += 1
+    return applied
+
+
 def apply_gripper_friction(stage):
     """Apply the high-friction PhysX material to both Panda fingers."""
     franka_root = find_franka_root(stage)
@@ -923,13 +1006,17 @@ def apply_gripper_friction(stage):
 
     material_prim = _ensure_gripper_friction_material(stage)
     applied = []
+    patched = 0
     for finger_name in FINGER_NAME_CANDIDATES:
         finger_prim = find_descendant_by_candidates(franka_root, [finger_name])
         if finger_prim is None:
             print(f"[gripper-friction] {finger_name} not found under Franka")
             continue
+        patched += _apply_torsional_patch(finger_prim)
         if _bind_physics_material(finger_prim, material_prim):
             applied.append(str(finger_prim.GetPath()))
+    print(f"[gripper-friction] torsional patch "
+          f"{GRIPPER_TORSIONAL_PATCH_M * 1000:.0f}mm on {patched} collider(s)")
 
     if applied:
         print(

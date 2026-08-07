@@ -35,7 +35,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("image_path", default_value="",
                               description="use this file as the frame instead of "
                                           "image_topic (offline test)"),
-        DeclareLaunchArgument("bbox_convention", default_value="absolute"),
+        DeclareLaunchArgument("bbox_convention", default_value="normalized_1000"),
         DeclareLaunchArgument("instruction", default_value=""),
         DeclareLaunchArgument("use_xterm", default_value="true"),
     ]

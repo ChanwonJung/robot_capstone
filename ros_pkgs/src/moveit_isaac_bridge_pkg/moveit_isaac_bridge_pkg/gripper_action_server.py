@@ -51,7 +51,12 @@ class GripperActionServer(Node):
         super().__init__("gripper_action_server")
 
         self.declare_parameter("contact_threshold_m", 0.008)
-        self.declare_parameter("timeout_sec",         3.0)
+        # 3.0 → 6.0: 손가락 드라이브 stiffness 를 5000 → 1000 으로 낮춰(책을
+        # 밀어 넘어뜨리지 않도록) 이동이 느려지면서, OPEN 이 40mm 에 닿기 전에
+        # 3초가 끝나 0.0339m 에서 잘렸다. 조가 덜 열린 채 하강하면 한쪽 여유가
+        # 26.7 → 20.6mm 로 줄어 책을 스친다. 속도를 되돌리는 대신 시간을 준다 —
+        # 파지력은 어차피 maxForce 로 잘려 속도와 무관하다.
+        self.declare_parameter("timeout_sec",         6.0)
         self.declare_parameter("move_action",         "/move_action")
         self.declare_parameter("planning_group",      "panda_hand")
         self.declare_parameter("joint_tolerance",     0.005)
@@ -235,6 +240,16 @@ class GripperActionServer(Node):
 
         final_pos = self._avg_finger_pos()
         result.position = final_pos
+
+        # 두 손가락을 따로 찍는다. 결과의 position 은 평균이라, 한쪽이 물체에
+        # 걸리고 다른 쪽만 닫히는 비대칭 파지가 "그럴듯한 평균값"에 가려진다.
+        # 책이 63mm 에서 멈춘 건(두께 26.6mm) 이 평균만 보고는 진단이 안 됐다.
+        with self._js_lock:
+            per_finger = dict(self._finger_pos)
+        spread = max(per_finger.values()) - min(per_finger.values())
+        detail = "  ".join(f"{k}={v * 1000:.2f}mm" for k, v in per_finger.items())
+        log = self.get_logger().warn if spread > 0.002 else self.get_logger().info
+        log(f"fingers: {detail}  (비대칭 {spread * 1000:.2f}mm)")
 
         if is_close:
             # Stalled on object if fingers stopped above contact threshold

@@ -126,11 +126,27 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             'grasp_xy_anchor',
-            default_value='median',
-            description="force_top_down 의 XY 앵커. 'median'=복원 cloud 중앙값"
-                        "(점 밀도가 높은 쪽으로 끌림), 'extent'=실루엣 폭의 중점"
-                        '(p2+p98)/2 로 밀도와 무관. 구처럼 한쪽 면만 찍히는 '
-                        '물체에서 median 이 밀리면 extent 로.',
+            default_value='extent',
+            description="force_top_down 의 XY 앵커. 'extent'=실루엣 폭의 중점"
+                        '(p2+p98)/2 로 점 밀도와 무관 — 기본값. '
+                        "'median'=복원 cloud 중앙값인데, TARGET 점이 EE 한 시점뿐이라 "
+                        '카메라를 향한 면으로 끌린다. 구 실측 median 16.4mm vs '
+                        'extent 7.8mm 편향, 그리퍼 여유는 한쪽 5.6mm 뿐이라 median '
+                        '으로는 구조적으로 실패했다. 원통(컵)·평면(책)은 둘이 비슷.',
+        ),
+        DeclareLaunchArgument(
+            'use_grasp_profiles',
+            default_value='true',
+            description='TARGET 라벨로 config/grasp_profiles.yaml 에서 '
+                        'z_frac/z_offset/xy_anchor 를 자동 선택. 구는 적도 아래, '
+                        '컵은 림 근처를 물어야 해서 값이 다른데, 여태 매번 launch '
+                        '인자로 넣던 것을 자동화한 것이다. false 면 아래 launch '
+                        '인자만 쓴다.',
+        ),
+        DeclareLaunchArgument(
+            'grasp_profiles_config',
+            default_value='',
+            description='비우면 graspgen_pkg 의 config/grasp_profiles.yaml',
         ),
         DeclareLaunchArgument(
             'override_xy_with_bbox_center',
@@ -246,6 +262,8 @@ def generate_launch_description() -> LaunchDescription:
                 'force_top_down_grasp_z_frac':   LaunchConfiguration('force_top_down_grasp_z_frac'),
                 'force_top_down_grasp_z_offset': LaunchConfiguration('force_top_down_grasp_z_offset'),
                 'grasp_xy_anchor':               LaunchConfiguration('grasp_xy_anchor'),
+                'use_grasp_profiles':            LaunchConfiguration('use_grasp_profiles'),
+                'grasp_profiles_config':         LaunchConfiguration('grasp_profiles_config'),
                 'override_xy_with_bbox_center':  LaunchConfiguration('override_xy_with_bbox_center'),
                 'extrinsics_config':LaunchConfiguration('extrinsics_config'),
                 'world_frame':      LaunchConfiguration('world_frame'),

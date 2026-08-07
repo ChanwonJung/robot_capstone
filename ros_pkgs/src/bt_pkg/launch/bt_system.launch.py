@@ -25,6 +25,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _robot_defaults() -> str:
@@ -68,6 +69,19 @@ def generate_launch_description():
         description="Absolute path to BT XML file (override for custom trees)",
     )
 
+    # bt_params.yaml 의 0.12 를 덮어쓴다. SelectGraspCandidate 가 이 거리만큼
+    # grasp pose 에서 접근축 반대로 물러난 지점을 pre_grasp 으로 쓰는데, 길수록
+    # 하강 구간에서 OMPL 이 옆으로 새어 물체를 칠 여지가 커진다. 책(높이 104mm,
+    # 두께 26.6mm)처럼 조 사이로 좁게 밀어 넣어야 하는 대상에서 0.12 는 과했다.
+    # 0.03 은 실기 검증값 — 짧게 바꾸는 게 목적이지 물체별 튜닝값은 아니므로
+    # 도달이 빠듯하면 인자로 늘리면 된다.
+    pre_grasp_arg = DeclareLaunchArgument(
+        "pre_grasp_z_offset",
+        default_value="0.03",
+        description=("grasp pose 에서 접근축 반대로 물러나는 거리(m). "
+                     "bt_params.yaml 값을 덮어쓴다."),
+    )
+
     # ── Nodes ───────────────────────────────────────────────────────────────
 
     # Safety first — up before anything else so the E-stop check is live
@@ -106,7 +120,13 @@ def generate_launch_description():
                 parameters=[
                     defaults_file,
                     params_file,
-                    {"tree_file": LaunchConfiguration("tree_file")},
+                    {
+                        "tree_file": LaunchConfiguration("tree_file"),
+                        # params_file 뒤에 와야 덮어쓴다.
+                        "pre_grasp_z_offset": ParameterValue(
+                            LaunchConfiguration("pre_grasp_z_offset"),
+                            value_type=float),
+                    },
                 ],
             )
         ],
@@ -115,6 +135,7 @@ def generate_launch_description():
     return LaunchDescription([
         ext_arg,
         tree_arg,
+        pre_grasp_arg,
         hazard_translator,
         yolo_world_map,
         bt_executor,

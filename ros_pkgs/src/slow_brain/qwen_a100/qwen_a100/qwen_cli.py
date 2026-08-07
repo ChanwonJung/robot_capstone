@@ -39,8 +39,9 @@ def main() -> int:
     ap.add_argument("--endpoint", default="http://localhost:8000/v1")
     ap.add_argument("--model", default="qwen35-local",
                     help="served model id on the vLLM endpoint (Qwen3.5-27B)")
-    ap.add_argument("--bbox-convention", default="absolute",
-                    choices=["absolute", "normalized_1000", "normalized_1"])
+    ap.add_argument("--bbox-convention", default="normalized_1000",
+                    choices=["absolute", "normalized_1000", "normalized_1"],
+                    help="normalized_1000 verified against qwen35-local")
     ap.add_argument("--timeout-sec", type=float, default=120.0)
     ap.add_argument("--annotate", metavar="PATH",
                     help="write a box-overlay PNG here to eyeball the coordinates")
@@ -74,8 +75,11 @@ def main() -> int:
     print(f"instruction   : {args.instruction}")
     print(f"target_label  : {grounding.target_label}")
     d = grounding.destination
-    print(f"destination   : {d.reference_label}  type={d.type} "
-          f"relation={d.relation or '-'} region={d.region or '-'}")
+    if d is None:
+        print("destination   : <none, pick-only>")
+    else:
+        print(f"destination   : {d.reference_label}  type={d.type} "
+              f"relation={d.relation or '-'} region={d.region or '-'}")
     print(f"confidence    : {grounding.confidence:.3f}")
     if meta["warning"]:
         print(f"WARNING       : {meta['warning']}")

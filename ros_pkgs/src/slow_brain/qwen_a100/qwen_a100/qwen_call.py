@@ -45,6 +45,34 @@ _SYSTEM_PROMPT = (
 )
 
 
+# Dual-view role split.  The wrist camera cannot see the destination at all in
+# this workspace (its near limit on the table is x ~ 0.58 m in panda_link0,
+# while the basket sits at x = 0.48), and the overhead camera resolves objects
+# at 1/4 the wrist camera's pixel density.  So each view is asked for exactly
+# the thing it can actually see, and qwen_bridge merges the two replies.
+#
+# These are appended to the shared prompt rather than replacing it, so the
+# object list, the box format and the ambiguity protocol stay identical across
+# both calls.
+VIEW_HINT_WRIST = (
+    "\n\nVIEW: close-up wrist camera, looking down at the objects.\n"
+    "Emit exactly one TARGET and classify everything else as OBSTACLE.\n"
+    "Do NOT emit a DESTINATION from this view and do NOT fill the destination\n"
+    "field — a separate overhead view handles the destination, and the\n"
+    "destination is usually outside this camera's field of view entirely."
+)
+
+VIEW_HINT_OVERHEAD = (
+    "\n\nVIEW: overhead camera, looking straight down at the whole workspace.\n"
+    "Emit ONLY the DESTINATION — the container or surface the object must end\n"
+    "up at — and fill the destination field describing it. Classify every other\n"
+    "object as OBSTACLE. Do NOT emit a TARGET from this view; a separate\n"
+    "close-up view handles the target.\n"
+    "If the instruction does not say where the object should go, emit no\n"
+    "DESTINATION and omit the destination field."
+)
+
+
 def _build_user_prompt(instruction: str, width: int, height: int) -> str:
     return (
         f"Workspace image is {width}x{height} pixels.\n"
@@ -102,8 +130,13 @@ def ground(
     timeout_sec: float = 120.0,
     max_tokens: int = 2048,
     temperature: float = 0.0,
+    view_hint: str = "",
 ) -> tuple[list[Detection], GroundingResult, dict[str, Any]]:
     """Run one grounding pass.
+
+    view_hint is appended verbatim to the user prompt.  Pass VIEW_HINT_WRIST or
+    VIEW_HINT_OVERHEAD to restrict a call to one role in the dual-view pipeline;
+    leave it empty for the single-view behaviour.
 
     Returns
     -------
@@ -136,7 +169,8 @@ def ground(
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
                     },
-                    {"type": "text", "text": _build_user_prompt(instruction, width, height)},
+                    {"type": "text",
+                     "text": _build_user_prompt(instruction, width, height) + view_hint},
                 ],
             },
         ],
@@ -178,7 +212,13 @@ def ground(
                 "expected 4 — is the endpoint honouring the JSON schema?")
 
     objects = scale_boxes(objects, bbox_convention, width, height)
+    n_scaled = len(objects)
     objects = clamp_boxes(objects, width, height)
+    # A wrong bbox_convention does not error anywhere — it pushes coordinates
+    # outside the frame, clamp_boxes collapses them to zero area and drops them,
+    # and the caller sees an empty detection list with no explanation. Count the
+    # casualties so the failure can name itself.
+    n_dropped = n_scaled - len(objects)
 
     # Ambiguity must be read BEFORE order_detections, which keeps the first
     # TARGET and demotes the rest to OBSTACLE. That normalisation is required
@@ -218,9 +258,19 @@ def ground(
                 f"detected labels {sorted(labels)} — place phase will have no pose"
             )
 
+    if n_dropped:
+        drop_note = (
+            f"{n_dropped} of {n_scaled} boxes collapsed to zero area and were "
+            f"dropped under bbox_convention={bbox_convention!r} — the convention "
+            "is probably wrong. Check with qwen_cli --annotate."
+        )
+        meta_warn = f"{meta_warn} | {drop_note}" if meta_warn else drop_note
+
     meta = {
         "source_size": [width, height],
         "n_objects": len(objects),
+        "n_raw": n_scaled,
+        "n_dropped_degenerate": n_dropped,
         "has_target": any(d.category == "TARGET" for d in objects),
         # Both must hold for a place to be possible: a spec to place BY, and a
         # segmented object to place AT.

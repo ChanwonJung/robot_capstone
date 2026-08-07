@@ -123,7 +123,10 @@ def main(args=None) -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # See yolo_world_map_node: a second shutdown after ros2 launch's own
+        # raises, and the traceback masquerades as a node crash on every Ctrl-C.
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -45,9 +45,13 @@ wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-
 wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
      -O models/g-sam/sam_vit_b_01ec64.pth
 
-# 3. System deps for BehaviorTree.CPP (the library source itself is already
-#    vendored in-tree at ros_pkgs/src/behavior_tree/ — nothing to clone)
-sudo apt install -y libzmq3-dev libsqlite3-dev libtinyxml2-dev
+# 3. System deps. libzmq3-dev/libsqlite3-dev/libtinyxml2-dev are for
+#    BehaviorTree.CPP (the library source is already vendored in-tree at
+#    ros_pkgs/src/behavior_tree/ — nothing to clone). xterm is required by the
+#    Slow Brain launch files, which wrap instruction_prompt_node in one because
+#    `ros2 launch` does not forward stdin; without it the launch dies with
+#    FileNotFoundError before you can type anything.
+sudo apt install -y libzmq3-dev libsqlite3-dev libtinyxml2-dev xterm
 
 # 4. YOLO venv (separate from gsam_venv — yolo_hazard_pkg launch files hardcode it)
 python3 -m venv .venv-yolo
@@ -324,103 +328,72 @@ See `ros_pkgs/src/bt_pkg/README.md` for full detail. Key points:
 - `MoveAction` must populate `start_state.joint_state` from `SceneData::latest_joint_state` before sending the hybrid planner goal
 - `behaviortree_ros2` and `behaviortree_cpp` (BT.cpp v4 core) are both vendored as ordinary tracked files under `ros_pkgs/src/behavior_tree/` — **not** submodules, and not at `ros_pkgs/src/BehaviorTree.CPP/`. Both are built by colcon; no apt install beyond the system deps in Initial setup
 - **Hazard levels** (`/bt/hazard_level`, `std_msgs/Int8`) are integer literals with no enum: `3` = HALT (a `halt_class_ids` detection at conf ≥ 0.6), `1` = SLOW (any detection at conf ≥ 0.5), `0` = CLEAR (or `decay_sec` 0.3 s elapsed). **`2` is never produced.** Only level ≥ 3 is acted on by the BT — `EmergencyStopClear` returns FAILURE and the wrapping `ReactiveSequence` suspends the tree. Levels 0–1 are handled by the hybrid planner and `hazard_collision_injector` instead
-- The **destination/place phase of `pick_and_place.xml` is commented out**, and the `TargetVisible` visibility guard is stubbed to `<AlwaysSuccess/>`. The tree currently ends after the retreat move. `TargetVisible` depends on `/yolo/target_centroid`, which is never published — `yolo_world_map_node` only publishes it when the `target_search_label`/`target_seed_centroid` parameters are set, and nothing in the repo ever sets them
-- `bt_executor_node.cpp` writes `behavior_trees/bt_models.xml` (a generated Groot2 artifact) on **every startup** via a hardcoded absolute `/home/hj1/...` path — it will fail or write to the wrong place on any other machine
+- The **place phase is live**, wrapped in a `Fallback` behind a `HasDestinationCentroid` guard — see "Place phase" below. The `TargetVisible` visibility guard is still stubbed to `<AlwaysSuccess/>`: it depends on `/yolo/target_centroid`, which is never published — `yolo_world_map_node` only publishes it when the `target_search_label`/`target_seed_centroid` parameters are set, and nothing in the repo ever sets them
+- `bt_models_out` (default `""`) controls the Groot2 node-model dump. It used to be a hardcoded absolute path into one developer's home directory, silently writing nowhere on every other machine. Set it to a writable path only when regenerating `behavior_trees/bt_models.xml`
 
-#### Required — handle pick-only tasks (no destination)
+#### Place phase
 
-`qwen_a100` now **omits** `destination` from `/qwen/grounding_result` when the
-instruction says nothing about where the object goes ("pick up the book").
-Previously the guided-decoding schema forced the field, so the VLM invented a
-destination and the BT acted on a hallucination.
+Live in `pick_and_place.xml` as a `Fallback`: `HasDestinationCentroid` →
+`UpdateTargetPose` → retry(3) of place / open / lift. The guard failing drops to
+`<AlwaysSuccess/>`, so a pick-only command ends normally holding the object.
 
-The key is omitted rather than set to null on purpose:
-`parse_grounding_result` does `j.contains("destination")` and then calls
-`.value()` on it, which would throw inside the parser on a null.
+**The guard keys on the measured centroid, never on `destination_spec`.** Two
+different failure modes need two different checks:
 
-**Two changes bt_pkg needs:**
+| Case | `destination_spec` | `destination` in `/world_map_result` |
+|---|---|---|
+| pick-only ("pick up the book") | empty | absent |
+| named but not in view ("put it in the box", no box visible) | **fully populated** | **absent** |
 
-1. **Clear `destination_spec` when the key is absent.**
-   [bt_executor_node.cpp:113](ros_pkgs/src/bt_pkg/src/bt_executor_node.cpp:113)
-   only assigns the four strings *inside* `if (j.contains("destination"))`, so a
-   pick-only scan leaves the **previous scan's spec in place**. Place the book in
-   the box, then say "pick up the cup", and the stale box destination is still
-   sitting in `SceneData`. Add an `else` that resets it, and set a
-   `has_destination` flag alongside.
+A spec-keyed guard passes the second case and places at a default-constructed
+`{0,0,0}` — the robot's own base, which it would then dive at. So
+`parse_world_map_result` sets `ObjectGeometry::centroid_valid` only inside the
+`if (o.contains("centroid"))` branch, and `ParseScene` ANDs that with
+`SceneData::has_destination` into the `has_destination_centroid` blackboard flag.
 
-2. **Make the place phase conditional — and gate on the CENTROID, not the spec.**
-   There are two independent failure modes and they need different checks:
+`parse_grounding_result` clears the spec and `has_destination` in an `else`
+branch: `qwen_a100` **omits** `destination` for a pick-only instruction (rather
+than nulling it — `j.contains()` then `.value()` would throw on a null), and
+without the clear the previous command's destination survives. Place the book in
+the box, then say "pick up the cup", and the arm would still carry it to the box.
 
-   | Case | `destination_spec` | `destination` key in `/world_map_result` |
-   |---|---|---|
-   | pick-only ("pick up the book") | empty | absent |
-   | named but not in scene ("put it in the box", no box visible) | **fully populated** | **absent** |
+**Heights describe the released object's underside, not the link8 pose.**
+`compute_place_pose` adds two measured quantities on top:
+`grasp_pose.z - target.centroid.z` (how high link8 rides above the object's
+centre while carrying it) and `target.centroid.z - target.bbox_min.z` (the
+object's half-height). So `container_drop_z: 0.03` means the same 3 cm of
+clearance for a book as for a cup. Containers measure from
+`bbox_3d_world.max.z` (the **rim**) — a basket's centroid sits ~90 mm below its
+own opening, and the old centroid-relative maths released into the wall.
+Beside-relations measure from `bbox_3d_world.min.z`, the surface the reference
+object stands on.
 
-   A guard keyed on the spec passes in the second case, so the place would still
-   execute — with `SceneData::destination_centroid` left at its zero-initialised
-   `{}` ([scene_data.hpp:52](ros_pkgs/src/bt_pkg/include/bt_pkg/scene_data.hpp:52)).
-   `compute_place_pose` with `type=container` then returns `(0, 0, 0.03)`: the arm
-   dives at its own base. Collision risk, not just a wrong place.
+`near` is direction-aware: it offsets from the destination centroid *toward the
+target's current centroid*, by (both XY footprint supports + `near_clearance_m`),
+floored at `near_offset_m`. The object lands on the side it is already on —
+shortest carry, and the arm never crosses over the destination. This matters
+because `near` is also where an empty or unrecognised `relation` lands. An
+unknown/empty `type` resolves the same way; it used to take **no branch at all**
+and return the raw centroid, burying the object inside the destination.
 
-   So the condition must be **"did `/world_map_result` carry a destination
-   centroid"**, which means `parse_world_map_result` needs a
-   `destination_centroid_valid` flag set only inside its
-   `if (d.contains("centroid"))` branch. Guarding on the spec alone is not enough.
+Place reuses the **grasp's yaw** (`place_keep_grasp_yaw`, default true) so the
+wrist does not twist the held object in transit. Set false for a fixed
+straight-down pose if a place turns out to be unreachable.
 
-   Also note the empty-spec case is separately dangerous: `compute_place_pose`
-   takes **no branch at all** for an unknown `type` and returns the raw centroid
-   with zero offsets, placing the object *inside* the destination.
+`retreat_pose` is owned by `SelectGraspCandidate`, not `ParseScene` — it must
+follow the candidate actually selected, or a retry retreats along the *first*
+candidate's axis. Place lifts off via `post_place_pose`, computed from
+`place_pose`; reusing the pick's `retreat_pose` would drag the open gripper back
+across the scene to where the object was picked up.
 
-A `Fallback` around the place subtree with a `HasDestinationCentroid` condition
-node is the smallest change; a `SubTree` guarded by a blackboard flag also works.
+`compute_place_pose` is pure geometry with a gtest suite
+(`test/test_destination_calculator.cpp`) — `colcon test --packages-select bt_pkg`.
 
-Related: `SceneData::destination_label` is written and never read, and
+Still true: `SceneData::destination_label` is written and never read, and
 `grounding_result_fresh` is set and never read — so `/qwen/grounding_result`
-gates nothing. `ParseScene` just snapshots whatever spec is present when it
-ticks. That is safe today only because Qwen publishes grounding well before the
+gates nothing on its own. `ParseScene` snapshots whatever spec is present when
+it ticks, which is safe only because Qwen publishes grounding well before the
 mask → projector → graspgen chain completes.
-
-#### Planned — direction-aware `near` in the place stage
-
-`destination_calculator.cpp` currently resolves every spatial relation to a
-**fixed axis offset in `panda_link0`**, ignoring scene geometry entirely:
-
-| relation | offset applied |
-|---|---|
-| `left_of` / `right_of` | `x ∓ side_offset_m` |
-| `in_front_of` / `behind` | `y ∓ side_offset_m` |
-| `on_top_of` | `z += place_height_m * 2` |
-| `near` | `z += place_height_m; x += near_offset_m` |
-| unknown / empty | `z += place_height_m` only |
-
-`near` is the weakest of these — it always shifts **+X by 8 cm**, whatever the
-actual layout. If the target sits on the −X side of the destination, the robot
-carries it across and places it on the far side, which is both a longer
-transport and more likely to clip the destination object on the way.
-
-**Planned change**: make `near` direction-aware. Instead of a constant axis
-offset, compute the horizontal unit vector from the destination centroid toward
-the target's current centroid and offset along that by `near_offset_m`. The
-target then lands on the side of the destination nearest to where it already
-is — shortest transport, and the approach never crosses over the destination.
-
-Both inputs are already available and currently unused:
-
-- `SceneData::target_centroid` and `destination_centroid` (from `/world_map_result`)
-- `bbox_3d_world.{min,max}` for both categories — also in `/world_map_result`,
-  read today only by `graspgen_node`, ignored entirely by the BT
-
-The bbox opens a second refinement: rather than a fixed 8 cm, offset to just
-outside the destination's XY footprint plus a clearance margin, so the distance
-scales with the destination's actual size instead of assuming one.
-
-This matters because `near` is also the **fallback** the whole relation vocabulary
-degrades to — an empty or unrecognised `relation` from the VLM resolves here (see
-`qwen_a100/schema.py`). Making it geometrically sensible upgrades the worst case
-from "arbitrary +X shove" to "nearest sensible free point", which is a reasonable
-reading of an under-specified instruction.
-
-Do this when re-enabling the commented-out place block in `pick_and_place.xml`.
 
 ### grounded_sam_pkg internals
 

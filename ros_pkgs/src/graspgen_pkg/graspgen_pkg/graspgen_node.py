@@ -22,6 +22,8 @@ from typing import Optional
 
 import numpy as np
 import rclpy
+import yaml
+from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from scipy.spatial.transform import Rotation as Rot
@@ -37,6 +39,13 @@ _LATCHED_QOS = QoSProfile(
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
     reliability=QoSReliabilityPolicy.RELIABLE,
 )
+
+# 같은 프로파일을 Slow Brain 입력 구독에도 쓴다. 이게 없으면 발행자가
+# TRANSIENT_LOCAL 이어도 VOLATILE 구독자에게는 이력이 전달되지 않는다 —
+# QoS 는 호환되므로 경고 한 줄 없이, 이 노드보다 먼저 나간 스캔 결과를
+# 영원히 못 받는다. Slow Brain 은 명령당 1회만 도는데 graspgen 은 보통
+# 나중에 뜨므로, 이 비대칭이 곧 "GraspGen 이 조용히 아무것도 안 함" 이었다.
+_LATCHED_SUB_QOS = _LATCHED_QOS
 
 from .zmq_client import GraspGenClient, check_deps
 from .depth_utils import (decode_depth, decode_mask, extract_K,
@@ -170,6 +179,23 @@ class GraspGenNode(Node):
         # min/max 가 아니라 2/98 퍼센타일인 건 아웃라이어 한두 점 때문.
         # 기본값은 컵/책에서 검증된 median 을 유지 — 바꾸려면 명시적으로 켤 것.
         p('grasp_xy_anchor', 'median')
+        # force_top_down 접근축을 타깃의 기울기에 맞출지. 기본은 정확히 수직.
+        # 기울어 선 평판(책)에서만 켜면 된다 — 회전 대칭 물체는 기울일 이유가
+        # 없고, 평판이 아닌 클라우드에서 최소분산축을 법선으로 믿으면 엉뚱한
+        # 자세가 나온다. 그래서 프로파일에서 물체별로 켠다.
+        p('force_top_down_align_tilt', False)
+        # 평판 판정: 최소축 std < ratio × 중간축 std. 책 실측은 6.3 vs 32.4mm
+        # (비 0.19) 라 여유롭게 통과하고, 구/컵은 통과하지 못한다.
+        p('force_top_down_tilt_planar_ratio', 0.5)
+        # 접근축이 수직에서 이 각을 넘으면 기울이지 않는다. top_down_filter 의
+        # 45° 보다 작게 잡아 필터와 싸우지 않도록 한다.
+        p('force_top_down_tilt_max_deg', 30.0)
+        # ── Per-object grasp profiles ────────────────────────────────────
+        # z_frac / z_offset / xy_anchor 는 물체 모양에 따라 값이 다르다 (구는
+        # 적도 아래, 컵은 림 근처). 여태 launch 인자로 매번 넣던 것을 TARGET
+        # 라벨 기반으로 자동 선택한다. 표는 config/grasp_profiles.yaml.
+        p('use_grasp_profiles', True)
+        p('grasp_profiles_config', '')   # 빈 값 = 패키지 기본 config
         # ── Client-side grasp filters ────────────────────────────────────
         # The paper recommends publishing ~100 grasps as a goal set, but
         # our MoveIt + BT pipeline is single-goal sequential. We pre-filter
@@ -243,6 +269,21 @@ class GraspGenNode(Node):
                 f"grasp_xy_anchor='{self._xy_anchor}' 는 알 수 없는 값 — "
                 "'median' 으로 되돌린다 (허용: median | extent)")
             self._xy_anchor = 'median'
+        # launch 가 준 값을 그대로 보존한다. _apply_grasp_profile 이 매 스캔
+        # 여기서 다시 출발해야 대상이 바뀔 때 프로파일이 누적되지 않는다.
+        self._align_tilt       = bool(g('force_top_down_align_tilt').value)
+        self._tilt_planar_ratio = float(
+            g('force_top_down_tilt_planar_ratio').value)
+        self._tilt_max_deg     = float(g('force_top_down_tilt_max_deg').value)
+        self._base_z_frac      = self._ftd_grasp_z_frac
+        self._base_z_off       = self._ftd_grasp_z_off
+        self._base_xy_anchor   = self._xy_anchor
+        self._base_align_tilt  = self._align_tilt
+        self._target_axes      = None
+        self._target_axis_std  = None
+        self._use_profiles     = bool(g('use_grasp_profiles').value)
+        self._grasp_profiles   = self._load_grasp_profiles(
+            str(g('grasp_profiles_config').value))
         self._td_enabled    = bool(g('top_down_filter_enabled').value)
         self._td_angle_deg  = float(g('top_down_angle_deg').value)
         self._ik_enabled    = bool(g('ik_filter_enabled').value)
@@ -335,9 +376,10 @@ class GraspGenNode(Node):
         self.create_subscription(Image,      g('ee_depth_topic').value,           self._ee_depth_cb, 10)
         self.create_subscription(CameraInfo, g('ee_camera_info_topic').value,     self._ee_info_cb,  10)
         self.create_subscription(Image,      g('ee_camera_rgb_topic').value,      self._ee_rgb_cb,   10)
-        self.create_subscription(Image,      g('mask_topic').value,               self._mask_cb,     10)
-        self.create_subscription(String,     g('labeled_detections_topic').value, self._dets_cb,     10)
-        self.create_subscription(String,     g('world_map_result_topic').value,   self._result_cb,   10)
+        # Slow Brain 출력 3개는 latched — 구독도 TRANSIENT_LOCAL 이어야 이력이 온다.
+        self.create_subscription(Image,      g('mask_topic').value,               self._mask_cb,     _LATCHED_SUB_QOS)
+        self.create_subscription(String,     g('labeled_detections_topic').value, self._dets_cb,     _LATCHED_SUB_QOS)
+        self.create_subscription(String,     g('world_map_result_topic').value,   self._result_cb,   _LATCHED_SUB_QOS)
 
         # grasp_candidates 만 latched. markers/target_cloud 는 RViz 디버그용이라
         # VOLATILE 유지 (latching 시 stale 마커가 누적될 수 있음).
@@ -397,18 +439,101 @@ class GraspGenNode(Node):
         self._pending_result = None
         self._result_cb(msg)
 
+    def _load_grasp_profiles(self, path: str) -> list:
+        """config/grasp_profiles.yaml 을 읽어 프로파일 리스트를 돌려준다.
+
+        읽기 실패는 치명적이지 않다 — launch 값으로 계속 돈다. 다만 조용히
+        넘어가면 "왜 프로파일이 안 먹지"를 몇 시간 헤매게 되므로 크게 찍는다.
+        """
+        if not self._use_profiles:
+            self.get_logger().info('use_grasp_profiles=false — launch 값만 사용')
+            return []
+        if not path:
+            path = os.path.join(
+                get_package_share_directory('graspgen_pkg'),
+                'config', 'grasp_profiles.yaml')
+        try:
+            with open(path) as f:
+                cfg = yaml.safe_load(f) or {}
+            profiles = cfg.get('profiles') or []
+            for prof in profiles:
+                prof['match'] = [str(k).lower() for k in prof.get('match', [])]
+            names = ', '.join(str(p.get('name', '?')) for p in profiles)
+            self.get_logger().info(
+                f'grasp profiles ({len(profiles)}) from {path}: {names}')
+            return profiles
+        except Exception as e:  # noqa: BLE001 — 파지는 계속 가능해야 한다
+            self.get_logger().error(
+                f'grasp_profiles 로드 실패 ({path}): {e} — launch 값으로 진행. '
+                '물체별 z_frac/z_offset 은 인자로 직접 넣어야 한다.')
+            return []
+
+    def _target_text(self) -> str:
+        """TARGET detection 의 모든 값을 합친 소문자 문자열 (키워드 매칭용).
+
+        VLM 라벨은 자유 문자열이라 ('red sphere', 'white cylinder') 정확 일치가
+        아니라 키워드 부분일치로 본다. TARGET 이 없으면 빈 문자열.
+        """
+        for det in (self._labeled_dets or []):
+            if str(det.get('category', '')).upper() == 'TARGET':
+                return ' '.join(str(v) for v in det.values()).lower()
+        return ''
+
     def _is_transparent_target(self) -> bool:
         """TARGET 이 투명물체인지 판정. force=true 면 항상 True(테스트용),
         아니면 TARGET detection 의 값 문자열에 transparent_labels 키워드 매칭."""
         if self._tr_force:
             return True
-        if not self._labeled_dets:
-            return False
-        for det in self._labeled_dets:
-            if str(det.get('category', '')).upper() == 'TARGET':
-                text = ' '.join(str(v) for v in det.values()).lower()
-                return any(k in text for k in self._tr_labels)
-        return False
+        text = self._target_text()
+        return bool(text) and any(k in text for k in self._tr_labels)
+
+    def _apply_grasp_profile(self) -> None:
+        """TARGET 라벨에 맞는 force_top_down 튜닝을 이번 스캔에 적용한다.
+
+        구는 적도 아래를 물어야 하고 컵은 림 근처를 물어야 해서, launch 기본값
+        하나로는 둘 다 못 맞춘다. 여태 매번 손으로 인자를 넣었고, 하나 빠뜨리면
+        인지 버그처럼 보이는 파지 실패로 재현됐다 — 그걸 라벨로 자동화한다.
+
+        _base_* 를 매번 기준으로 삼는다. 직전 스캔이 남긴 값에서 출발하면
+        대상이 바뀔 때 프로파일이 누적돼 엉뚱한 높이가 된다.
+        """
+        self._ftd_grasp_z_frac = self._base_z_frac
+        self._ftd_grasp_z_off = self._base_z_off
+        self._xy_anchor = self._base_xy_anchor
+        self._align_tilt = self._base_align_tilt
+
+        if not self._use_profiles or not self._grasp_profiles:
+            return
+
+        text = self._target_text()
+        if not text:
+            return
+
+        for prof in self._grasp_profiles:
+            if not any(k in text for k in prof.get('match', [])):
+                continue
+            self._ftd_grasp_z_frac = float(
+                prof.get('z_frac', self._base_z_frac))
+            self._ftd_grasp_z_off = float(
+                prof.get('z_offset', self._base_z_off))
+            self._xy_anchor = str(
+                prof.get('xy_anchor', self._base_xy_anchor)).strip().lower()
+            self._align_tilt = bool(
+                prof.get('align_tilt', self._base_align_tilt))
+            self.get_logger().info(
+                f"grasp profile '{prof.get('name', '?')}' matched TARGET "
+                f"→ z_frac={self._ftd_grasp_z_frac:.2f} "
+                f"z_offset={self._ftd_grasp_z_off:+.3f} "
+                f"xy_anchor={self._xy_anchor} "
+                f"align_tilt={self._align_tilt} "
+                f"(launch 값 {self._base_z_frac:.2f}/{self._base_z_off:+.3f}/"
+                f"{self._base_xy_anchor} 대체 — 끄려면 use_grasp_profiles:=false)")
+            return
+
+        self.get_logger().info(
+            f'매칭되는 grasp profile 없음 → launch 값 유지 '
+            f'z_frac={self._base_z_frac:.2f} z_offset={self._base_z_off:+.3f} '
+            f'xy_anchor={self._base_xy_anchor}')
 
     # ── main trigger ─────────────────────────────────────────────────────────
 
@@ -421,6 +546,10 @@ class GraspGenNode(Node):
             self._pending_result = msg.data
             self.get_logger().warn('EE 캐시 미도착 — 대기')
             return
+
+        # 대상이 바뀌면 파지 높이도 바뀐다. detections 가 캐시된 뒤, 실제 추론에
+        # 쓰이기 전에 이번 스캔의 TARGET 라벨로 프로파일을 고른다.
+        self._apply_grasp_profile()
 
         # [디버그] 원본 EE depth 범위 확인
         self.get_logger().debug(
@@ -642,6 +771,27 @@ class GraspGenNode(Node):
                 f'분산비={ratio:.2f}')
         except (ValueError, np.linalg.LinAlgError) as e:
             self.get_logger().warn(f'PCA short-axis 계산 실패: {e}')
+
+        # 3D PCA — 기울어진 평판(책)의 접근축을 세우는 데 쓴다. 위의 2D PCA 는
+        # z 성분을 0 으로 박아 기울기를 통째로 버리므로 별도로 계산한다.
+        # 축은 분산 내림차순: axes[:,0]=최대 … axes[:,2]=최소.
+        # 책 표지처럼 평면인 클라우드에서는 최소축이 곧 표지 법선(=두께 방향)
+        # 이고, 그 std 가 나머지보다 확연히 작다는 점으로 "평판인지"를 판정한다.
+        self._target_axes = None
+        self._target_axis_std = None
+        try:
+            P3 = np.asarray(pts_world, dtype=np.float64)
+            Q3 = P3 - P3.mean(axis=0)
+            ev3, evec3 = np.linalg.eigh(Q3.T @ Q3)
+            order = np.argsort(ev3)[::-1]
+            self._target_axes = evec3[:, order]
+            self._target_axis_std = np.sqrt(
+                np.maximum(ev3[order], 0.0) / max(len(P3), 1))
+            self.get_logger().debug(
+                'TARGET PCA3D std(mm)=' + ' '.join(
+                    f'{s * 1000:.1f}' for s in self._target_axis_std))
+        except (ValueError, np.linalg.LinAlgError) as e:
+            self.get_logger().warn(f'PCA 3D 계산 실패: {e}')
         dt_pca = time.monotonic() - t_pca
 
         try:
@@ -755,22 +905,107 @@ class GraspGenNode(Node):
                 # x_axis 를 down 에 직교화 (이미 수평이라 거의 그대로)
                 x_axis = x_axis - np.dot(x_axis, down) * down
                 x_axis /= (np.linalg.norm(x_axis) + 1e-12)
-                y_axis = np.cross(down, x_axis)
-                R_td   = np.column_stack([x_axis, y_axis, down])
+                # 부호 정규화 — 반드시 필요하다.
+                # 평행 그리퍼는 접근축(+Z) 기준 180° 회전에 대해 물리적으로
+                # 동일한 파지다. 그런데 x_axis 는 PCA 고유벡터라 부호가 임의로
+                # 정해진다. 뒤집힌 쪽이 걸리면 손목 yaw 만 π 다른 "같은 파지"를
+                # 목표로 삼게 되고, MoveIt 은 그걸 j1/j3 null-space 자전으로
+                # 풀어낸다: 책에서 실측한 궤적이 j1 +134° / j3 -146° / j7 -167°
+                # (합계 7.8rad) 인데 EE 는 제자리였고, gripper yaw(≈j1+j3+j7)만
+                # 정확히 -π 바뀌었다. 관절공간 이동이 너무 길어 local planner 가
+                # 1.5Hz 로 다 소화하지 못하고 stuck abort 로 죽었다.
+                # 회전 대칭 타깃(사과/공/컵)은 어느 부호든 무관해서 이 버그가
+                # 책에서만 드러났다.
+                if (x_axis[0] < 0.0) or (abs(x_axis[0]) < 1e-9 and x_axis[1] < 0.0):
+                    x_axis = -x_axis
+                approach = down.copy()
+                # ── 기울기 정렬 (align_tilt 프로파일) ──────────────────────
+                # 기본 경로는 접근축을 정확히 수직으로 고정하고 폐쇄축을 수평면에
+                # 투영한다. 회전 대칭 물체엔 맞지만, 기울어 선 책에서는 패드가
+                # 표지와 어긋나 모서리로만 닿는다. 실측(world_map_396.ply, 책
+                # 6040점)에서 표지 법선이 수평에서 7.5°, 높이축이 수직에서 8.2°
+                # 기울어 있었다.
+                #   폐쇄축(+X) = 최소분산축 = 표지 법선(두께 방향)
+                #   접근축(+Z) = 나머지 두 축 중 더 수직인 쪽을 아래로
+                # 평판이 아닌 클라우드에서 엉뚱한 축을 잡지 않도록 두 가지를
+                # 검사한다: (1) 최소축 std 가 중간축 std 보다 확실히 작을 것
+                # (평판성), (2) 얻어진 접근축이 수직에서 max_tilt 이내일 것.
+                # 하나라도 어긋나면 조용히 기존 top-down 으로 되돌아간다.
+                tilt_applied = False
+                if self._align_tilt and self._target_axes is not None:
+                    axes = self._target_axes
+                    std = self._target_axis_std
+                    planar = std[2] < self._tilt_planar_ratio * std[1]
+                    n_axis = axes[:, 2]                      # 최소분산 = 법선
+                    # 접근축 후보: 최대/중간축 중 더 수직인 쪽, 아래로 향하게
+                    cand = max((axes[:, 0], axes[:, 1]),
+                               key=lambda v: abs(float(v[2])))
+                    if cand[2] > 0.0:
+                        cand = -cand
+                    tilt_deg = float(np.degrees(
+                        np.arccos(min(1.0, abs(float(cand[2]))))))
+                    if planar and tilt_deg <= self._tilt_max_deg:
+                        x_axis = n_axis - np.dot(n_axis, cand) * cand
+                        x_axis /= (np.linalg.norm(x_axis) + 1e-12)
+                        if (x_axis[0] < 0.0) or (abs(x_axis[0]) < 1e-9
+                                                 and x_axis[1] < 0.0):
+                            x_axis = -x_axis
+                        approach = cand
+                        tilt_applied = True
+                        self.get_logger().info(
+                            f'align_tilt: 접근축을 수직에서 {tilt_deg:.1f}° 기울임 '
+                            f'| 법선 std={std[2] * 1000:.1f}mm vs 중간축 '
+                            f'{std[1] * 1000:.1f}mm | approach=('
+                            f'{approach[0]:+.3f},{approach[1]:+.3f},{approach[2]:+.3f})')
+                    else:
+                        self.get_logger().info(
+                            f'align_tilt: 조건 미충족 → 수직 top-down 유지 '
+                            f'(평판성={"O" if planar else "X"} '
+                            f'std {std[2] * 1000:.1f}/{std[1] * 1000:.1f}mm, '
+                            f'기울기 {tilt_deg:.1f}° > {self._tilt_max_deg:.0f}°)')
+                y_axis = np.cross(approach, x_axis)
+                y_axis /= (np.linalg.norm(y_axis) + 1e-12)
+                x_axis = np.cross(y_axis, approach)          # 재직교화
+                x_axis /= (np.linalg.norm(x_axis) + 1e-12)
+                R_td   = np.column_stack([x_axis, y_axis, approach])
+                # ★ panda_link8 프레임 보정 — 45° 를 빼먹으면 안 된다.
+                # 위 행렬은 "폐쇄축 = 프레임의 +X" 를 가정하지만, Panda 는
+                # 그렇지 않다. URDF 에서 panda_hand 는 panda_link8 에 Rz(-45°)
+                # 로 붙고 손가락은 panda_hand 의 +Y 를 따라 미끄러진다. 따라서
+                # 실제 폐쇄 방향은 link8 프레임의 Rz(-45°)·(0,1,0) =
+                # (0.7071, 0.7071, 0) — +X 에서 45° 돌아간 대각선이다.
+                # R_td·Rz(-45°) 로 후곱하면 그 대각선이 x_axis 를 향하게 되고
+                # 접근축(+Z)은 그대로 유지된다.
+                #
+                # 이걸 빠뜨려 모든 파지가 yaw 로 45° 틀어져 있었다. 사과/공/컵은
+                # 회전 대칭이라 아무 차이가 없어 여태 안 드러났고, 책에서 처음
+                # 터졌다: 조가 두께 26.6mm 대신 26.6·cos45 + 171.5·sin45 =
+                # 140mm 를 물어야 해서 63mm 에서 끼고, 자유물체인 책이 패드에
+                # 맞춰 회전하며 대롱대롱 매달렸다.
+                # Isaac 실측으로 확인: 명령 +X 방위 -43.0° vs 실제 조 방향
+                # (panda_hand +Y) -89.5° → 46.5°, 그리고 명령 프레임의
+                # (0.707,0.707,0) 을 월드로 옮기면 실측과 1.2° 일치.
+                c45 = np.sqrt(0.5)
+                R_link8_fix = np.array([[c45,  c45, 0.0],
+                                        [-c45, c45, 0.0],
+                                        [0.0,  0.0, 1.0]])
+                R_td = R_td @ R_link8_fix
                 quat_td = Rot.from_matrix(R_td).as_quat().tolist()
                 # 결정론적 Z: fingertip 을 "복원된 pts_world 의 실제 높이"
                 # 기준으로 둔다. projector 의 centroid[2] 는 투명물체에서
                 # see-through(테이블 높이 ≈0) 라 못 쓴다 — 그걸 쓰면 손끝이
                 # 테이블로 내려가거나(=0) GraspGen scatter z 로 컵 위에서 닫힌다.
                 # z_frac 로 몸통 어디를 잡을지 튜닝. wrist(panda_link8) 는
-                # 그보다 0.103m 위 (approach=down 이므로 +Z 방향).
+                # 손끝에서 접근축 반대로 0.103m 뒤 — 수직 접근이면 정확히 +Z
+                # 0.103m 이고, align_tilt 로 기울면 XY 도 같이 밀린다(8° 기울기
+                # 에서 약 14mm). 이걸 +Z 로만 두면 기울인 만큼 손끝이 목표에서
+                # 빗나간다.
                 pw    = np.asarray(pts_world, dtype=np.float64)
                 zc    = pw[:, 2]
                 z_bot = float(np.percentile(zc, 10))
                 z_top = float(np.percentile(zc, 90))
                 fingertip_z = (z_bot + self._ftd_grasp_z_frac * (z_top - z_bot)
                                + self._ftd_grasp_z_off)
-                wrist_z = fingertip_z + 0.103
                 # XY 도 복원 cloud 중심(robust median)으로 센터링. GraspGen 원본
                 # XY 는 컵에서 최대 ~8cm 벗어나 있어 수직 grasp 이 옆으로 빗나감.
                 # projector bbox 대신 복원 cloud 를 쓰는 이유는 Z 앵커와 동일.
@@ -784,11 +1019,13 @@ class GraspGenNode(Node):
                 else:
                     cx_r = float(np.median(pw[:, 0]))
                     cy_r = float(np.median(pw[:, 1]))
+                fingertip = np.array([cx_r, cy_r, fingertip_z])
+                wrist     = fingertip - 0.103 * approach
                 for c in candidates:
                     c['quaternion']  = quat_td
-                    c['position'][0] = cx_r
-                    c['position'][1] = cy_r
-                    c['position'][2] = wrist_z
+                    c['position'][0] = float(wrist[0])
+                    c['position'][1] = float(wrist[1])
+                    c['position'][2] = float(wrist[2])
                 # 두 앵커를 항상 같이 찍는다 — 한 번 돌리면 편향(Δ)이 바로
                 # 측정된다. 여유가 한쪽 5.6mm 라 이 값이 성패를 가른다.
                 mx = float(np.median(pw[:, 0]))
@@ -798,10 +1035,12 @@ class GraspGenNode(Node):
                 ey = float(np.percentile(pw[:, 1], 2.0)
                            + np.percentile(pw[:, 1], 98.0)) * 0.5
                 self.get_logger().info(
-                    f'force_top_down: 수직 grasp | cloud z=[{z_bot:.3f},{z_top:.3f}] '
+                    f'force_top_down: {"기울인" if tilt_applied else "수직"} grasp | '
+                    f'cloud z=[{z_bot:.3f},{z_top:.3f}] '
                     f'frac={self._ftd_grasp_z_frac:.2f} off={self._ftd_grasp_z_off:+.3f} '
-                    f'→ XY=({cx_r:.3f},{cy_r:.3f}) fingertip_z={fingertip_z:.3f} '
-                    f'wrist_z={wrist_z:.3f} (+X=({x_axis[0]:+.2f},{x_axis[1]:+.2f})) '
+                    f'→ fingertip=({cx_r:.3f},{cy_r:.3f},{fingertip_z:.3f}) '
+                    f'wrist=({wrist[0]:.3f},{wrist[1]:.3f},{wrist[2]:.3f}) '
+                    f'(+X=({x_axis[0]:+.2f},{x_axis[1]:+.2f},{x_axis[2]:+.2f})) '
                     f'× {len(candidates)}')
                 self.get_logger().info(
                     f'  xy_anchor={self._xy_anchor} | '

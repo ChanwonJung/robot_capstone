@@ -41,11 +41,33 @@
       - panda_joint7
     home_joint_values:  [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
 
-    # ── Camera topics (Isaac Sim ROS 2 bridge defaults) ───────────────────────
-    ee_depth_topic:         "/ee_camera/depth_image"
-    ee_camera_info_topic:   "/ee_camera/camera_info"
-    top_depth_topic:        "/top_camera/depth_image"
-    top_camera_info_topic:  "/top_camera/camera_info"
+    # Observation pose — where the scene loads, which is the configuration
+    # camera_extrinsics.yaml was captured at and therefore the only pose a scan
+    # is valid from. NOT the Panda "ready" state above: the BT returns here at
+    # the end of every cycle, and a scan from anywhere else is silently
+    # projected to wrong world coordinates rather than failing.
+    #
+    # Left unset (the default) the BT latches it from the first /joint_states —
+    # it comes up before the arm has moved, so that sample is the load pose by
+    # construction, and the latched values are logged at startup.
+    #
+    # Pin it here only if the BT may be restarted while the arm is parked
+    # somewhere else; paste the values from that startup log.
+    # observation_joint_values: [...]
+
+    # ── Camera topics (Isaac Sim ROS 2 bridge — see sim/isaac_ros_camera_bridge.py)
+    # Isaac names the RGB and the depth/camera_info streams differently:
+    #   EE  rgb=/ee_camera/image_raw  depth+info=/ee_rgbd_camera/*
+    #   TOP rgb=/camera/image_raw     depth+info=/rgbd_camera/*
+    # The old /ee_camera/depth_image and /top_camera/* values matched nothing;
+    # every launch file happened to override them, which is why nothing broke
+    # loudly. Anything reading these straight from here was silently dead.
+    ee_rgb_topic:           "/ee_camera/image_raw"
+    ee_depth_topic:         "/ee_rgbd_camera/depth_image"
+    ee_camera_info_topic:   "/ee_rgbd_camera/camera_info"
+    top_rgb_topic:          "/camera/image_raw"
+    top_depth_topic:        "/rgbd_camera/depth_image"
+    top_camera_info_topic:  "/rgbd_camera/camera_info"
 
     # ── Camera extrinsics ─────────────────────────────────────────────────────
     # Empty = package-internal default.  Override per-session:
