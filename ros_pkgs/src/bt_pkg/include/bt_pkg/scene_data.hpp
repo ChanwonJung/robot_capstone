@@ -51,6 +51,20 @@ struct ObjectGeometry {
   }
 };
 
+// One thing standing on the support surface, as an XY footprint to place
+// around. From /world_map_result "obstacles" — found by height rather than by
+// category, because a "table" mask swallows the objects sitting on it.
+//
+// top_valid == false means the footprint came from a 2D box, not from depth:
+// the object returned no depth at all (glass), so its XY is known and its
+// height is not. Do not read top_z in that case.
+struct TabletopObstacle {
+  std::array<double, 3> centroid  = {};
+  double                xy_radius = 0.0;
+  double                top_z     = 0.0;
+  bool                  top_valid = false;
+};
+
 // One entry from /yolo/world_map
 struct YoloObject {
   std::string class_name;
@@ -75,6 +89,10 @@ struct SceneData {
   ObjectGeometry destination;
   std::string target_label;
   std::string destination_label;
+  // Everything else standing on the surface, target and destination included —
+  // the extractor works by height and cannot tell them apart. Callers that
+  // place must skip the footprints belonging to those two.
+  std::vector<TabletopObstacle> obstacles;
 
   // ── /grasp_candidates (vgn_grasp_node) ──────────────────────────────────
   bool grasp_candidates_fresh = false;

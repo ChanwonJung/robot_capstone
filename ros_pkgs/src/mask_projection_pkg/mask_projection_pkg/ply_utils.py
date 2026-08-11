@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -58,7 +58,8 @@ def save_ply_labeled(path: Path, category_points: List[CategoryPoints]) -> None:
         f.write(arr.tobytes())
 
 
-def build_result_json(category_points: List[CategoryPoints]) -> str:
+def build_result_json(category_points: List[CategoryPoints],
+                      obstacles: Optional[List[Dict]] = None) -> str:
     """
     JSON summary per category: label, centroid, bbox_3d_world, point_count.
 
@@ -67,8 +68,18 @@ def build_result_json(category_points: List[CategoryPoints]) -> str:
                     "bbox_3d_world": {"min": [x,y,z], "max": [x,y,z]},
                     "point_count": N},
       "destination": { ... },
+      "obstacles": [{"centroid": [x,y,z], "xy_radius": r, "top_z": z|null,
+                     "point_count": N}],
       ...
     }
+
+    `obstacles` is a LIST, not a per-category key: the tabletop clutter has no
+    stable labels (a "table" mask swallows the objects standing on it, so they
+    are found by height, not by category) and two of them can share a name. It
+    is additive — every existing key keeps its meaning, so graspgen and the
+    legacy consumers are unaffected. A `top_z` of null means the footprint came
+    from a 2D box because the object returned no depth (glass), so the XY is
+    known and the height is not.
     """
     _CATEGORY_KEY = {
         CATEGORY_TARGET:      'target',
@@ -89,4 +100,6 @@ def build_result_json(category_points: List[CategoryPoints]) -> str:
             },
             'point_count':   len(cp.points),
         }
+    if obstacles:
+        out['obstacles'] = obstacles
     return json.dumps(out)

@@ -25,10 +25,11 @@ _LATCHED_QOS = QoSProfile(
 )
 
 from .cloud_builder import build_pointcloud2
-from .label_mapper import CATEGORY_FREE, CategoryPoints
+from .label_mapper import CATEGORY_FREE, CATEGORY_TARGET, CategoryPoints
 from .ply_utils import build_result_json, save_ply_labeled
 from .projection_engine import (
     collect_seg_points,
+    extract_tabletop_obstacles,
     filter_free_by_unknown,
     load_extrinsics,
     project_labeled,
@@ -393,10 +394,29 @@ class MultiViewProjectorNode(Node):
         header.stamp    = self.get_clock().now().to_msg()
         header.frame_id = 'world'
 
+        # ── tabletop clutter ──────────────────────────────────────────────────
+        # The support plane comes from the TARGET's own underside, not from any
+        # surface mask: the object is standing on the plane, which is physics,
+        # while a "table" mask's own z is whatever the mask leaked onto (two
+        # scans minutes apart gave centroid z 0.007 and -0.768). Without a
+        # target there is nothing to place and nothing to measure from.
+        obstacles = []
+        target_pts = [cp.points for cp in all_category_points
+                      if cp.category == CATEGORY_TARGET and len(cp.points)]
+        if target_pts:
+            surface_z = float(np.vstack(target_pts)[:, 2].min())
+            obstacles = extract_tabletop_obstacles(all_category_points, surface_z)
+            self.get_logger().info(
+                f'Tabletop obstacles: {len(obstacles)} on plane z={surface_z:+.4f}'
+                + ''.join(f" [{o['centroid'][0]:+.3f},{o['centroid'][1]:+.3f}"
+                          f" r={o['xy_radius']:.3f} top={o['top_z']:+.3f}]"
+                          for o in obstacles))
+
         # ── publish ───────────────────────────────────────────────────────────
         t_build_publish = time.monotonic()
         self._pub_cloud.publish(build_pointcloud2(header, all_category_points))
-        self._pub_result.publish(String(data=build_result_json(all_category_points)))
+        self._pub_result.publish(
+            String(data=build_result_json(all_category_points, obstacles)))
         self._pub_raw_cloud.publish(self._build_raw_cloud(header, all_category_points))
         dt_build_publish = time.monotonic() - t_build_publish
 

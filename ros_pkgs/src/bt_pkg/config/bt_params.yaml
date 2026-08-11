@@ -42,11 +42,38 @@ bt_executor_node:
     # the object's half-height and how high link8 rides above its centre are
     # both measured from the scan and added on. So one clearance value means
     # the same thing for a book and for a cup.
-    side_offset_m:    0.08   # XY offset for left_of / right_of / in_front_of / behind
+    side_offset_m:    0.08   # MINIMUM XY offset for left_of / right_of / in_front_of / behind
     place_height_m:   0.05   # clearance above the destination's top / support surface
     container_drop_z: 0.03   # clearance above the container's RIM (bbox_3d_world.max.z)
     near_offset_m:    0.08   # minimum radial offset for "near"
-    near_clearance_m: 0.05   # gap between the two XY footprints for "near"
+    near_clearance_m: 0.05   # gap between the two XY footprints, "near" and named directions alike
+
+    # Surface regions ("the right side of the table") scale with the
+    # destination's own measured footprint — a fixed shift from a table's
+    # centroid is still its middle. Note the footprint is the top-view mask
+    # clipped by the depth/workspace crop, so it can under-report a table
+    # running out of frame; region_max_offset_m is the reach ceiling.
+    region_frac:         0.6   # fraction of the destination's half-extent toward the edge
+    region_max_offset_m: 0.45  # cap on the shift
+
+    # Hard XY envelope on the RESULT, which is what the arm has to reach — this
+    # is what lets region_max_offset_m be generous. Measured on this scene: a
+    # place at radius 0.777 succeeded, 0.853 aborted five times (spec 0.855).
+    # An over-reaching shift is shortened along its own direction, not dropped.
+    max_place_reach_m:   0.80
+
+    # Clearance under the CARRIED OBJECT along the transit path. MoveAction's
+    # min_path_z constrains link8; the object hangs (hold offset + half-height)
+    # below it, so the BT derives the link8 floor per object instead of using a
+    # constant. 0.12 clears the 0.10 m glass with 2 cm to spare.
+    carry_clearance_m:   0.12
+
+    # Placing onto clutter. The geometric offset knows only directions, so
+    # "the left side of the table" lands on the apple if the apple is there.
+    # Obstacles come from /world_map_result "obstacles" — found by HEIGHT above
+    # the support plane, because a table mask swallows the objects on it.
+    place_clearance_m:     0.04  # gap between the placed object and any obstacle
+    place_search_radius_m: 0.20  # how far to look for a clear spot before giving up
 
     # Keep the pick's yaw so the wrist doesn't twist the held object in transit.
     # false = fixed straight-down, for when a place is unreachable.

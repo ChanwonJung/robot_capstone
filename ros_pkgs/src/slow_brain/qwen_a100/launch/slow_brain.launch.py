@@ -119,6 +119,10 @@ def generate_launch_description() -> LaunchDescription:
                               description="3 SAM candidates per box, keep the best"),
         DeclareLaunchArgument("target_priority", default_value="true",
                               description="TARGET wins where masks overlap"),
+        DeclareLaunchArgument(
+            "annotated_save_history", default_value="false",
+            description="keep every scan's overlay as output/annotated/"
+                        "<view>_<stamp>.png, not just <view>_latest.png"),
         # ── Projection ───────────────────────────────────────────────────────
         DeclareLaunchArgument("ee_depth_topic", default_value="/ee_rgbd_camera/depth_image"),
         DeclareLaunchArgument("top_depth_topic", default_value="/rgbd_camera/depth_image"),
@@ -148,6 +152,12 @@ def generate_launch_description() -> LaunchDescription:
     sam_params = os.path.join(
         get_package_share_directory("sam_a100"), "config", "sam_a100_params.yaml")
 
+    # Where each view's annotated overlay is mirrored to disk. output/ is already
+    # gitignored. Empty when ROBOT_CAPSTONE_ROOT is unset, which the node reads
+    # as "saving off" rather than guessing at a writable directory.
+    _root = os.environ.get("ROBOT_CAPSTONE_ROOT", "")
+    annotated_dir = os.path.join(_root, "output", "annotated") if _root else ""
+
     sam_node = Node(
         package="sam_a100",
         executable="sam_mask_node",
@@ -165,6 +175,9 @@ def generate_launch_description() -> LaunchDescription:
             "source_image_topic": "/qwen/source_image",
             "detections_topic": "/qwen/labeled_detections",
             "mask_topic": "/sam/mask_image",
+            "annotated_save_dir": annotated_dir,
+            "annotated_save_name": "ee",
+            "annotated_save_history": LaunchConfiguration("annotated_save_history"),
         }],
         condition=IfCondition(LaunchConfiguration("enable_sam")),
     )
@@ -189,6 +202,9 @@ def generate_launch_description() -> LaunchDescription:
             "detections_topic": "/qwen/top/labeled_detections",
             "mask_topic": "/sam/top/mask_image",
             "annotated_topic": "/sam/top/annotated_image",
+            "annotated_save_dir": annotated_dir,
+            "annotated_save_name": "top",
+            "annotated_save_history": LaunchConfiguration("annotated_save_history"),
         }],
         condition=IfCondition(PythonExpression([
             "'", LaunchConfiguration("enable_sam"), "'.lower() in ('true', '1')",

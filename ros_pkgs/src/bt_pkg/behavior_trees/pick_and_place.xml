@@ -113,10 +113,21 @@
               <!-- num_attempts 3 이하 — 골 연타는 hybrid 컨테이너 SIGABRT. -->
               <RetryUntilSuccessful num_attempts="3">
                 <Sequence name="Place Attempt">
-                  <!-- 물체를 든 이동이라 자세는 안 묶는다(도달성).
-                       최종 자세는 goal constraint 가 잡는다. -->
-                  <MoveAction pose_key="place_pose" speed="0.3"
-                              min_path_z="0.15"/>
+                  <!-- pick 과 대칭: pre_place 로 높이 날아간 뒤 수직 하강.
+                       min_path_z 는 목표점까지 포함하는 box constraint 라,
+                       place_pose(z=0.206) 에 carry_path_z(0.277) 를 걸면
+                       "자기 목적지보다 위에 머물러라"가 되어 반드시
+                       ACTION_ABORTED 다. transit 구간에만 걸어야 한다.
+                       carry_path_z = carry_clearance_m + (hold offset +
+                       half-height) — 상수 0.15 는 link8 기준이라 책 밑면이
+                       0.157 아래인 z=-0.007(테이블 높이)로 지나가 컵을 쳤다.
+                       물체를 든 이동이라 자세는 안 묶는다(도달성). -->
+                  <MoveAction pose_key="pre_place_pose" speed="0.3"
+                              min_path_z="{carry_path_z}"/>
+                  <!-- 하강: pre_place → place 직선. pick 의 grasp 와 같은
+                       패턴이라 min_path_z 없음(있으면 자기 목적지를 배제). -->
+                  <MoveAction pose_key="place_pose" speed="0.15"
+                              lock_orientation="true" lock_orientation_tol="0.2"/>
                   <GripperAction command="open"/>
                   <!-- post_place_pose = place_pose 에서 접근축 따라 상승.
                        pick 의 retreat_pose 는 "집었던 자리" 위라, 재사용하면

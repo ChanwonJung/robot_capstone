@@ -19,6 +19,10 @@ Publishes
   /sam/mask_image              sensor_msgs/Image   mono8 label map, latched
   /sam/annotated_image         sensor_msgs/Image   bgr8 debug overlay, optional
 
+Writes (when annotated_save_dir is set)
+  <dir>/<annotated_save_name>_latest.png            the same overlay, per scan
+  <dir>/<annotated_save_name>_<sec>_<nsec>.png      as well, if save_history
+
 Why the trigger is the IMAGE and not the detections: qwen_bridge publishes
 detections, then grounding, then source_image LAST.  ROS 2 gives no ordering
 guarantee across topics, so triggering on the first publish can fire before the
@@ -33,6 +37,7 @@ top camera still contributes UNKNOWN geometry for obstacle avoidance.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 
@@ -91,11 +96,43 @@ class SamMaskNode(Node):
         self.declare_parameter("max_mask_fraction", 0.6)
         self.declare_parameter("publish_annotated", True)
 
+        # Mirror the annotated overlay to disk so a scan can be inspected without
+        # RViz attached — the overlay is the only artefact that shows whether the
+        # VLM boxed the object you named, and it is otherwise gone the moment the
+        # next scan overwrites the topic.
+        #
+        # Empty = disabled, on purpose: a hardcoded absolute default would write
+        # into one developer's home directory and silently nowhere on every other
+        # machine. The launch file supplies a path under $ROBOT_CAPSTONE_ROOT.
+        self.declare_parameter("annotated_save_dir", "")
+        # Distinguishes the two instances' files. The overhead node overrides it.
+        self.declare_parameter("annotated_save_name", "ee")
+        # Keep every scan as <name>_<stamp>.png alongside the latest. Off by
+        # default — a long session would otherwise fill the directory.
+        self.declare_parameter("annotated_save_history", False)
+
         self._timeout_ms = int(self.get_parameter("zmq_timeout_ms").value)
         self._multimask = bool(self.get_parameter("multimask").value)
         self._target_priority = bool(self.get_parameter("target_priority").value)
         self._min_pixels = int(self.get_parameter("min_mask_pixels").value)
         self._max_fraction = float(self.get_parameter("max_mask_fraction").value)
+
+        self._save_name = str(self.get_parameter("annotated_save_name").value)
+        self._save_history = bool(self.get_parameter("annotated_save_history").value)
+        self._save_dir = str(self.get_parameter("annotated_save_dir").value)
+        if self._save_dir:
+            try:
+                os.makedirs(self._save_dir, exist_ok=True)
+                self.get_logger().info(
+                    f"annotated overlays -> {self._save_dir}/{self._save_name}_latest.png"
+                    + (" (+ per-scan history)" if self._save_history else ""))
+            except OSError as exc:
+                # Do not fall back to a writable place — a silently relocated
+                # debug artefact is worse than none.
+                self.get_logger().error(
+                    f"annotated_save_dir {self._save_dir!r} is not usable ({exc}) "
+                    "— overlay saving disabled")
+                self._save_dir = ""
 
         self._bridge = CvBridge()
         self._lock = threading.Lock()
@@ -233,14 +270,18 @@ class SamMaskNode(Node):
             mask_msg.header = img_msg.header
             self._mask_pub.publish(mask_msg)
 
-            if self._annotated_pub is not None:
-                vis_msg = self._bridge.cv2_to_imgmsg(
-                    self._overlay(image_bgr, label_map, picks), encoding="bgr8")
-                # Carry the source header. Without it the stamp is 0 and RViz's
-                # Image display can drop the message as "too old", plus there is
-                # no way to trace the overlay back to its source frame.
-                vis_msg.header = img_msg.header
-                self._annotated_pub.publish(vis_msg)
+            if self._annotated_pub is not None or self._save_dir:
+                vis = self._overlay(image_bgr, label_map, picks)
+                if self._annotated_pub is not None:
+                    vis_msg = self._bridge.cv2_to_imgmsg(vis, encoding="bgr8")
+                    # Carry the source header. Without it the stamp is 0 and
+                    # RViz's Image display can drop the message as "too old",
+                    # plus there is no way to trace the overlay back to its
+                    # source frame.
+                    vis_msg.header = img_msg.header
+                    self._annotated_pub.publish(vis_msg)
+                if self._save_dir:
+                    self._save_overlay(vis, img_msg.header.stamp)
 
             summary = ", ".join(
                 f"{d.get('category')}='{d.get('label')}'→{i + 1}({stats.get(i + 1, 0)}px)"
@@ -256,6 +297,26 @@ class SamMaskNode(Node):
         finally:
             with self._lock:
                 self._busy = False
+
+    def _save_overlay(self, vis: np.ndarray, stamp) -> None:
+        """Write the overlay to annotated_save_dir. Never raises into the callback.
+
+        The stamp comes from the source frame's header, not the wall clock, so a
+        history file can be matched against the exact image it was computed on.
+        """
+        latest = os.path.join(self._save_dir, f"{self._save_name}_latest.png")
+        try:
+            if not cv2.imwrite(latest, vis):
+                raise OSError(f"cv2.imwrite returned False for {latest}")
+            if self._save_history:
+                cv2.imwrite(
+                    os.path.join(
+                        self._save_dir,
+                        f"{self._save_name}_{stamp.sec}_{stamp.nanosec:09d}.png"),
+                    vis)
+        except (OSError, cv2.error) as exc:
+            # A debug artefact must never take the perception path down with it.
+            self.get_logger().warn(f"could not write annotated overlay: {exc}")
 
     def _overlay(self, image_bgr: np.ndarray, label_map: np.ndarray,
                  picks: list[tuple[int, dict]]) -> np.ndarray:

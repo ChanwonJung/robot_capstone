@@ -595,12 +595,23 @@ class QwenBridgeNode(Node):
                 self.get_logger().info(
                     "no destination — publishing target only; the place phase "
                     "will be skipped.")
-            elif dual and not top_has_dest:
-                self.get_logger().warn(
-                    f"destination {destination.reference_label!r} described but "
-                    "not segmented in the overhead view — /world_map_result will "
-                    "carry NO destination centroid. bt_pkg must gate the place "
-                    "phase on the centroid, not on this spec.")
+            else:
+                # Described but not segmented → no centroid in /world_map_result.
+                # WHICH view owed the segmentation depends on the mode: overhead
+                # owns DESTINATION under dual-view (keep_only enforces it), the
+                # single wrist call owns it otherwise. This is the only place
+                # that check belongs — qwen_call.parse() sees one view and used
+                # to fire it on every overhead-only destination, which is the
+                # normal path for a table or the basket.
+                view = "overhead" if dual else "wrist"
+                segmented = top_has_dest if dual else meta["has_destination"]
+                if not segmented:
+                    self.get_logger().warn(
+                        f"destination {destination.reference_label!r} described "
+                        f"but not segmented in the {view} view — "
+                        "/world_map_result will carry NO destination centroid. "
+                        "bt_pkg must gate the place phase on the centroid, not "
+                        "on this spec.")
             if meta["warning"]:
                 self.get_logger().warn(meta["warning"])
 
