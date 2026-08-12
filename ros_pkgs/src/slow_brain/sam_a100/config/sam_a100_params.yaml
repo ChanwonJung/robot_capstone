@@ -56,3 +56,18 @@
     min_mask_pixels: 50
 
     publish_annotated: true
+
+    # Mirror the annotated overlay to disk as <name>_latest.png. The overlay is
+    # what tells you whether the VLM boxed the object you actually named, and
+    # on the topic alone it is gone as soon as the next scan lands.
+    #
+    # Left empty here and set by slow_brain.launch.py to
+    # $ROBOT_CAPSTONE_ROOT/output/annotated (already gitignored) — a hardcoded
+    # absolute path would write into one developer's home directory and nowhere
+    # on any other machine. The launch file also sets annotated_save_name to
+    # "ee"/"top" so the two instances do not overwrite each other.
+    annotated_save_dir: ""
+    annotated_save_name: "ee"
+    # Also keep <name>_<stamp>.png per scan. Off by default; a long session
+    # would fill the directory.
+    annotated_save_history: false

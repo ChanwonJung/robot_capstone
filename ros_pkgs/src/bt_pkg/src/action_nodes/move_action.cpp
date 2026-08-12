@@ -130,7 +130,25 @@ bool MoveAction::setGoal(Goal& goal)
   // 책 옆/아래로 path 를 만드는 문제 차단. EE link 가 (z ≥ min_path_z) 영역
   // 안에만 sampling 되도록 큰 box constraint.
   double min_path_z = 0.0;
-  getInput("min_path_z", min_path_z);
+  if (!getInput("min_path_z", min_path_z)) {
+    // A blackboard reference that does not resolve leaves min_path_z at 0 and
+    // silently drops the floor — the arm then flies low with no log saying so.
+    RCLCPP_WARN(logger(),
+      "MoveAction: min_path_z port did not resolve — no path floor applied");
+    min_path_z = 0.0;
+  }
+  // The constraint is a box over the whole path, so it also has to contain the
+  // goal. A floor above the target makes the plan unsatisfiable, and the only
+  // symptom is ACTION_ABORTED — indistinguishable from an unreachable pose.
+  // Transit and descent belong in separate MoveActions (pre_place → place).
+  if (min_path_z > target_pose.pose.position.z + 1e-6) {
+    RCLCPP_ERROR(logger(),
+      "MoveAction '%s': min_path_z %.3f is ABOVE the goal z %.3f — the "
+      "constraint excludes its own target and the plan cannot succeed. "
+      "Dropping the floor; split transit and descent instead.",
+      pose_key.c_str(), min_path_z, target_pose.pose.position.z);
+    min_path_z = 0.0;
+  }
   if (min_path_z > 1e-6) {
     moveit_msgs::msg::PositionConstraint path_pos_c;
     path_pos_c.header.frame_id = planning_frame_;

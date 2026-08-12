@@ -77,6 +77,23 @@ static void parse_world_map_result(const std::string& raw,
     auto j = json::parse(raw);
     parse_object_geometry(j, "target",      scene.target,      scene.target_label);
     parse_object_geometry(j, "destination", scene.destination, scene.destination_label);
+
+    // Optional and additive: a projector that predates this key just leaves the
+    // list empty, and placement falls back to the plain geometric offset.
+    scene.obstacles.clear();
+    for (const auto& o : j.value("obstacles", json::array())) {
+      if (!o.contains("centroid")) continue;
+      bt_pkg::TabletopObstacle ob;
+      ob.centroid  = {o["centroid"][0], o["centroid"][1], o["centroid"][2]};
+      ob.xy_radius = o.value("xy_radius", 0.0);
+      // null top_z = footprint recovered from a 2D box because the object
+      // returned no depth. XY is usable, height is not.
+      if (o.contains("top_z") && !o["top_z"].is_null()) {
+        ob.top_z     = o["top_z"].get<double>();
+        ob.top_valid = true;
+      }
+      scene.obstacles.push_back(ob);
+    }
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("bt_executor"),
       "parse_world_map_result failed: %s", e.what());
@@ -240,6 +257,17 @@ int main(int argc, char** argv)
   place_params.container_drop_z = node->declare_parameter<double>("container_drop_z", 0.03);
   place_params.near_offset_m    = node->declare_parameter<double>("near_offset_m",    0.08);
   place_params.near_clearance_m = node->declare_parameter<double>("near_clearance_m", 0.05);
+  place_params.region_frac      = node->declare_parameter<double>("region_frac",      0.6);
+  place_params.region_max_offset_m =
+    node->declare_parameter<double>("region_max_offset_m", 0.45);
+  place_params.max_place_reach_m =
+    node->declare_parameter<double>("max_place_reach_m", 0.80);
+  place_params.carry_clearance_m =
+    node->declare_parameter<double>("carry_clearance_m", 0.12);
+  place_params.place_clearance_m =
+    node->declare_parameter<double>("place_clearance_m", 0.04);
+  place_params.place_search_radius_m =
+    node->declare_parameter<double>("place_search_radius_m", 0.20);
   place_params.keep_grasp_yaw   = node->declare_parameter<bool>("place_keep_grasp_yaw", true);
 
   // ── Shared state ──────────────────────────────────────────────────────────
@@ -459,11 +487,27 @@ int main(int argc, char** argv)
     std::chrono::milliseconds(100),
     [&tree, &node]() {
       auto status = tree.tickOnce();
-      if (status == BT::NodeStatus::SUCCESS) {
-        RCLCPP_INFO(node->get_logger(), "BT cycle complete — waiting for next command");
-      } else if (status == BT::NodeStatus::FAILURE) {
-        // RepeatForever wraps the top level, so FAILURE here is unexpected.
-        RCLCPP_ERROR(node->get_logger(), "BT returned FAILURE at root — this is a bug");
+      // FAILURE at the root is the NORMAL end of a pass, not a bug. The tree is
+      // KeepRunningUntilFailure(Inverter(pipeline)): a completed pipeline
+      // returns SUCCESS, the Inverter flips it, and KeepRunningUntilFailure
+      // exits on that FAILURE — the one-shot exit its own comment describes.
+      // The next tick restarts from WaitForScene.
+      //
+      // This used to log ERROR "this is a bug" on every successful cycle,
+      // citing a RepeatForever that the tree has not used for some time. A
+      // false alarm on the success path is worse than no log: it sent a real
+      // investigation (a place phase skipped for want of a destination
+      // centroid) chasing an imaginary root-level crash.
+      //
+      // SUCCESS is unreachable — KeepRunningUntilFailure only ever returns
+      // RUNNING or FAILURE — so treat it as the genuine surprise.
+      if (status == BT::NodeStatus::FAILURE) {
+        RCLCPP_INFO(node->get_logger(),
+          "BT cycle complete — waiting for next command");
+      } else if (status == BT::NodeStatus::SUCCESS) {
+        RCLCPP_ERROR(node->get_logger(),
+          "BT returned SUCCESS at root, which KeepRunningUntilFailure cannot "
+          "produce — the tree structure changed without updating this check");
       }
     });
 

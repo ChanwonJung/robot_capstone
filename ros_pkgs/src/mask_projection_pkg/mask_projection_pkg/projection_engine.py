@@ -16,6 +16,7 @@ from scipy.spatial import KDTree
 from .back_projection import depth_to_points
 from .label_mapper import (
     CATEGORY_COLOR,
+    CATEGORY_DESTINATION,
     CATEGORY_FREE,
     CATEGORY_UNKNOWN,
     CategoryPoints,
@@ -154,6 +155,162 @@ def filter_free_by_unknown(
                 categories=cp.categories[keep],
             ))
     return result
+
+
+# ── tabletop occupancy ────────────────────────────────────────────────────────
+
+def extract_tabletop_obstacles(
+    category_points: List[CategoryPoints],
+    surface_z:       float,
+    *,
+    min_height:      float = 0.020,
+    max_height:      float = 0.400,
+    cell:            float = 0.020,
+    min_points:      int   = 15,
+    workspace_x:     Tuple[float, float] = (0.15, 0.95),
+    workspace_y:     Tuple[float, float] = (-0.75, 0.75),
+    arm_top_z:       float = 0.250,
+) -> List[Dict]:
+    """Things standing on the surface, as XY footprints to place around.
+
+    Height, not category, is what separates them. A "table" mask covers the
+    objects sitting on it, so they inherit DESTINATION rather than OBSTACLE:
+    one measured scan put 197 k points under DESTINATION spanning z to 0.516,
+    with only 172 left in UNKNOWN. Categories cannot be trusted here; the 2 cm
+    of clear air above the tabletop can.
+
+    Clustering is 8-connected on a `cell` grid rather than KDTree/DBSCAN —
+    footprints are what matter, the grid IS the output resolution, and it costs
+    one pass over a few thousand points.
+
+    `arm_top_z` drops the robot itself, which the overhead view sees as a tall
+    narrow column (one scan: 84 points at (0.469, 0.007) reaching z = 0.400).
+    Objects on this table top out around 0.13.
+
+    Returns dicts of {centroid, xy_radius, top_z, point_count} — xy_radius is
+    the circumscribed radius of the cluster's footprint, so a caller can keep
+    its own footprint clear of it without reasoning about shape.
+    """
+    pts = [cp.points for cp in category_points
+           if cp.category in (CATEGORY_DESTINATION, CATEGORY_UNKNOWN)
+           and len(cp.points)]
+    if not pts:
+        return []
+    p = np.vstack(pts)
+
+    keep = ((p[:, 0] > workspace_x[0]) & (p[:, 0] < workspace_x[1]) &
+            (p[:, 1] > workspace_y[0]) & (p[:, 1] < workspace_y[1]) &
+            (p[:, 2] > surface_z + min_height) &
+            (p[:, 2] < surface_z + max_height))
+    p = p[keep]
+    if len(p) < min_points:
+        return []
+
+    gx = np.floor(p[:, 0] / cell).astype(np.int64)
+    gy = np.floor(p[:, 1] / cell).astype(np.int64)
+    cells: Dict[Tuple[int, int], List[int]] = {}
+    for i in range(len(p)):
+        cells.setdefault((int(gx[i]), int(gy[i])), []).append(i)
+
+    out: List[Dict] = []
+    seen: set = set()
+    for start in cells:
+        if start in seen:
+            continue
+        seen.add(start)
+        stack, comp = [start], []
+        while stack:
+            cur = stack.pop()
+            comp.append(cur)
+            for da in (-1, 0, 1):
+                for db in (-1, 0, 1):
+                    nb = (cur[0] + da, cur[1] + db)
+                    if nb in cells and nb not in seen:
+                        seen.add(nb)
+                        stack.append(nb)
+        idx = [i for c in comp for i in cells[c]]
+        if len(idx) < min_points:
+            continue
+        q = p[idx]
+        top_z = float(q[:, 2].max())
+        if top_z > surface_z + arm_top_z:
+            continue                      # the arm, not a tabletop object
+        c = q[:, :2].mean(axis=0)
+        radius = float(np.max(np.linalg.norm(q[:, :2] - c, axis=1)))
+        out.append({
+            'centroid':    [round(float(c[0]), 4), round(float(c[1]), 4),
+                            round(float(q[:, 2].mean()), 4)],
+            'xy_radius':   round(radius, 4),
+            'top_z':       round(top_z, 4),
+            'point_count': len(idx),
+        })
+    out.sort(key=lambda o: -o['point_count'])
+    return out
+
+
+def obstacles_from_boxes(
+    boxes:      List[Dict],
+    K:          np.ndarray,
+    R:          np.ndarray,
+    t:          np.ndarray,
+    surface_z:  float,
+    *,
+    min_radius: float = 0.020,
+) -> List[Dict]:
+    """XY footprints for objects the depth stream cannot see, from 2D boxes.
+
+    A glass returns no depth, so it is absent from the cloud entirely — the one
+    obstacle that most needs avoiding is the one extract_tabletop_obstacles()
+    cannot find. The VLM does see it (`glass` is in every detection list), so
+    intersect the box's corner rays with the support plane instead of trusting
+    depth. An overhead camera looks nearly straight down, which is what keeps
+    the XY error small; the same trick under the wrist camera's oblique view
+    would smear the footprint badly.
+
+    Height is NOT recovered — top_z is None. Callers must treat these as
+    "occupied XY, unknown height".
+
+    boxes: [{'label': str, 'bbox_xyxy': [x1, y1, x2, y2]}] in the image the
+    K/R/t describe. R, t map camera frame → world (panda_link0).
+    """
+    if not len(boxes):
+        return []
+    Kinv = np.linalg.inv(np.asarray(K, dtype=np.float64).reshape(3, 3))
+    R = np.asarray(R, dtype=np.float64).reshape(3, 3)
+    t = np.asarray(t, dtype=np.float64).reshape(3)
+
+    out: List[Dict] = []
+    for b in boxes:
+        x1, y1, x2, y2 = (float(v) for v in b['bbox_xyxy'])
+        corners = np.array([[x1, y1, 1.0], [x2, y1, 1.0],
+                            [x2, y2, 1.0], [x1, y2, 1.0]]).T
+        dirs = R @ (Kinv @ corners)          # (3, 4) ray directions in world
+        hits = []
+        for i in range(dirs.shape[1]):
+            d = dirs[:, i]
+            # Parallel to the plane, or pointing away from it: no intersection.
+            if abs(d[2]) < 1e-6:
+                continue
+            s = (surface_z - t[2]) / d[2]
+            if s <= 0:
+                continue
+            hits.append(t + s * d)
+        if len(hits) < 3:
+            continue
+        h = np.asarray(hits)
+        c = h[:, :2].mean(axis=0)
+        radius = max(float(np.max(np.linalg.norm(h[:, :2] - c, axis=1))),
+                     min_radius)
+        out.append({
+            'label':       b.get('label', ''),
+            'centroid':    [round(float(c[0]), 4), round(float(c[1]), 4),
+                            round(float(surface_z), 4)],
+            'xy_radius':   round(radius, 4),
+            'top_z':       None,            # depth-less: height unknown
+            'point_count': 0,
+            'source':      'box',
+        })
+    return out
 
 
 # ── internal ──────────────────────────────────────────────────────────────────

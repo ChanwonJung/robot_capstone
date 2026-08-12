@@ -83,6 +83,12 @@ def main() -> int:
     print(f"confidence    : {grounding.confidence:.3f}")
     if meta["warning"]:
         print(f"WARNING       : {meta['warning']}")
+    # Single view, so "described but not segmented HERE" really does mean the
+    # place phase gets no centroid. qwen_bridge makes the same call across its
+    # two views instead; parse() no longer guesses on either's behalf.
+    if d is not None and not meta["has_destination"]:
+        print(f"WARNING       : destination {d.reference_label!r} described but "
+              f"not segmented in this view — place phase would have no pose")
     print()
     print(f"{len(objects)} objects (array order == mask label value):")
     for i, det in enumerate(objects):

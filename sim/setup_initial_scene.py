@@ -109,6 +109,31 @@ BASKET_TRANSLATE = np.array([-1.9213, 2.6944, 0.72])
 # 235x213mm 로 사실상 정사각이라 90도 돌려도 눈에 띄는 차이가 없다 (실측 확인).
 # 가로를 길게 하려면 아래 SCALE 을 비균일로 줘야 한다.
 BASKET_ROTATION_DEG = np.array([90.0, 0.0, -25.0])
+# ── Phone — stacking destination for "put X on top of the phone" ──────────────
+# poly.pizza/m/1L9oJAw6nY2, "Phone" by Alex Safayan, CC-BY 3.0 (credit required).
+#
+# 회전에 X+90 을 주면 안 된다. 사과·바구니는 에셋이 Y-up 이라 X+90 으로 세우지만,
+# 이 에셋은 stage upAxis=Y 인데도 납작한 면의 법선이 **Z** 다 (실측 bbox
+# 0.760 x 1.504 x 0.176, 얇은 축 = Z). 즉 무회전이 이미 "눕힌" 자세이고,
+# X+90 을 주면 폰이 세로로 선다. yaw -25 는 부모 테이블의 +25 를 상쇄해
+# (바구니와 같은 관용구) 장축을 panda_link0 +X 에 정렬시킨다.
+PHONE_ASSET = IMPORTED_ASSETS_DIR / "Phone.usd"
+# link0 (0.520, 0.420), 베이스에서 0.668m — 검증된 도달 대역(컵 0.654) 안이다.
+# 기존 5개 물체는 link0 y = +0.269(사과) ~ -0.420(바구니) 로 거의 일직선이라
+# 폰(198x100mm)이 들어갈 틈이 없었다. 줄 바깥 +Y 로 빼서:
+#   책과 0.57m — top view 에서 유일한 다른 직사각형이 책이라(세워둔 윗면
+#   172x27mm 가 어두운 막대로 보인다) 붙여두면 DESTINATION 오선택 위험이 있다.
+#   사이에 둥근 사과가 끼어 형태 혼동도 없다. 가장 가까운 이웃(사과)과 66mm.
+# top camera FOV 는 2m 에서 x[0.12,1.56] y[-0.96,0.96] — 여유 있게 안쪽이다.
+# z: 에셋 바닥이 원점 아래 0.07861 이므로 0.72863(상판) + 0.07861*0.1316.
+PHONE_TRANSLATE = np.array([-2.6657, 3.0857, 0.73898])
+PHONE_ROTATION_DEG = np.array([0.0, 0.0, -25.0])
+# 콜라이더는 본체 박스만 잡는다. bbox 전체(Z 0.0975)를 쓰면 한쪽 모서리 돌출부
+# 높이에 평면이 생겨 공이 비주얼 표면보다 6mm 떠서 놓인다. 본체 상단은 Z 0.049.
+# convexHull/Decomposition 을 피하는 이유는 테이블 상판과 같다 — 두께 자체가
+# 23mm 라 십수 mm 부풀면 치명적이다 (fix_table_collision 주석 참조).
+PHONE_COLLIDER_SIZE = np.array([0.740, 1.500, 0.120])
+PHONE_COLLIDER_TRANSLATE = np.array([-0.0048, 0.0739, -0.0110])
 # 0.17 → 0.12. 에셋 원본 bbox = X 1.960 / Y 1.093(위) / Z 1.771 이므로
 #   scale 0.12 -> 가로 235 x 세로 213 x 높이 131 mm.
 # 피벗은 바닥이다 (에셋 Y_min=0.037 ≈ 0) — 축소해도 상판 접지가 안 틀어진다.
@@ -135,6 +160,13 @@ GLASS_SCALE = np.array([0.00906, 0.00906, 0.01499]) * _TABLETOP_SCALE
 # 유리컵과 같은 68mm — 테니스공(67mm) 크기, 여유 11.2mm.
 RED_BALL_SCALE = np.array([0.02547213, 0.02547213, 0.02547213]) * _TABLETOP_SCALE
 BOOK_SCALE = np.array([0.10, 0.10, 0.10]) * _TABLETOP_SCALE
+# 에셋 원본 0.760 x 1.504 x 0.176 -> 0.1316 배로 100.0 x 198.0 x 23.2 mm.
+# 폭 100mm 를 먼저 정하고 거기서 역산한 값이다: 빨간공 지름이 68mm 이고 place
+# 정확도가 ~10mm 라, 폭이 90mm 밑으로 내려가면 공이 얹힐 자리가 안 나온다.
+# 실제 폰(75~80mm)보다 넓어 Qwen 이 "tablet" 이라 부를 수는 있는데, 그래도
+# 동작한다 — destination_label 은 parse_scene 로그에서만 쓰이고 어떤 분기도
+# 이 문자열을 보지 않는다. 좁히려면 이 배율 하나만 바꾸면 콜라이더까지 따라온다.
+PHONE_SCALE = np.array([0.188, 0.188, 0.188]) * _TABLETOP_SCALE
 # 책 무게 — 평행 그리퍼 grasp 유지를 쉽게 하려고 실제(~0.35kg)보다 가볍게.
 # 마찰력 F = μ·N 이라 무게가 가벼우면 적은 grip force 로도 안 미끄러짐.
 BOOK_MASS = 0.15
@@ -327,6 +359,7 @@ TABLETOP_OBJECT_PATHS = {
     "RedBall": "/World/CapstoneAdditions/TabletopItems/RedBall",
     "Book": "/World/CapstoneAdditions/TabletopItems/Book",
     "Basket": "/World/CapstoneAdditions/TabletopItems/Basket",
+    "Phone": "/World/CapstoneAdditions/TabletopItems/Phone",
 }
 
 DEPTH_OVERLAY = None
@@ -596,6 +629,43 @@ def build_basket(stage, path):
     return root
 
 
+def build_phone(stage, path):
+    """Flat-topped stacking destination — static, like the basket.
+
+    Static rather than a dynamic body on purpose: a released ball lands on it,
+    and a light rigid body would be shoved out from under its own place pose.
+    Nothing picks the phone up, so it never needs to be dynamic.
+    """
+    root = define_xform(
+        stage,
+        path,
+        translate=PHONE_TRANSLATE,
+        rotate_xyz_deg=PHONE_ROTATION_DEG,
+    )
+    if PHONE_ASSET.exists():
+        visual = add_visual_reference(
+            stage,
+            f"{path}/Visual",
+            PHONE_ASSET,
+            scale=PHONE_SCALE,
+        )
+        # Same reason as the basket: a culled face writes no depth, and the top
+        # camera's bbox_3d_world.max.z on this prim IS the height the ball is
+        # released at. An inverted winding would measure the table underneath.
+        n = set_double_sided(visual)
+        print(f"[phone] doubleSided on {n} gprim(s)")
+    else:
+        print(f"[phone] 에셋 없음 — 건너뜀: {PHONE_ASSET}")
+        return root
+    build_box_collider(
+        stage,
+        f"{path}/Collider",
+        size=(PHONE_COLLIDER_SIZE * PHONE_SCALE).tolist(),
+        translate=(PHONE_COLLIDER_TRANSLATE * PHONE_SCALE).tolist(),
+    )
+    return root
+
+
 def build_book(stage, path):
     root = create_dynamic_body_root(stage, path, BOOK_TRANSLATE, mass=BOOK_MASS)
     set_xform(root, rotate_xyz_deg=BOOK_ROTATION_DEG)
@@ -639,6 +709,7 @@ def build_tabletop_items(stage, root_path):
     build_red_ball(stage, f"{props_root.GetPath()}/RedBall")
     build_book(stage, f"{props_root.GetPath()}/Book")
     build_basket(stage, f"{props_root.GetPath()}/Basket")
+    build_phone(stage, f"{props_root.GetPath()}/Phone")
     return props_root
 
 

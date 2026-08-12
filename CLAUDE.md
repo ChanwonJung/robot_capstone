@@ -324,7 +324,9 @@ Both grasp publishers use **latched QoS** (`transient_local`, depth 1) on `/gras
 See `ros_pkgs/src/bt_pkg/README.md` for full detail. Key points:
 
 - `SceneData` (mutex-guarded struct) is the only shared state between the ROS subscription callbacks and BT node `tick()` calls — nothing goes through the blackboard except computed poses and indices
-- `RequestReplan` returns `FAILURE` intentionally to restart the pipeline from `WaitForScene` via `RepeatForever` — this is not a bug
+- The root is `KeepRunningUntilFailure(Inverter(pipeline))`, **not** `RepeatForever` (`bt_pkg/README.md` still says otherwise). The Inverter flips a completed pipeline's SUCCESS into FAILURE, which is how the pass ends; the next tick restarts from `WaitForScene`. **So FAILURE at the root is the normal end of a cycle.** `bt_executor_node` logged `ERROR "BT returned FAILURE at root — this is a bug"` on every successful pass until 2026-08-11, which sent a real investigation chasing an imaginary crash
+- `RequestReplan` returns `FAILURE` intentionally, taking the same path back to `WaitForScene` — also not a bug
+- **A skipped place phase announces itself.** `HasDestinationCentroid` failing drops into `<AlwaysSuccess/>`, so the arm completes the pick and returns to observation — outwardly identical to a tree with no place logic. It now logs which of the two causes applies: WARN for "named but never measured" (spec filled, no centroid — usually the overhead view returned no DESTINATION detection), INFO for a genuine pick-only instruction
 - `MoveAction` must populate `start_state.joint_state` from `SceneData::latest_joint_state` before sending the hybrid planner goal
 - `behaviortree_ros2` and `behaviortree_cpp` (BT.cpp v4 core) are both vendored as ordinary tracked files under `ros_pkgs/src/behavior_tree/` — **not** submodules, and not at `ros_pkgs/src/BehaviorTree.CPP/`. Both are built by colcon; no apt install beyond the system deps in Initial setup
 - **Hazard levels** (`/bt/hazard_level`, `std_msgs/Int8`) are integer literals with no enum: `3` = HALT (a `halt_class_ids` detection at conf ≥ 0.6), `1` = SLOW (any detection at conf ≥ 0.5), `0` = CLEAR (or `decay_sec` 0.3 s elapsed). **`2` is never produced.** Only level ≥ 3 is acted on by the BT — `EmergencyStopClear` returns FAILURE and the wrapping `ReactiveSequence` suspends the tree. Levels 0–1 are handled by the hybrid planner and `hazard_collision_injector` instead
@@ -368,6 +370,45 @@ own opening, and the old centroid-relative maths released into the wall.
 Beside-relations measure from `bbox_3d_world.min.z`, the surface the reference
 object stands on.
 
+**A `surface` destination is scene background, not an object, and no statistic
+of its geometry is trustworthy.** Two live scans of the same table minutes
+apart, same instruction shape, disagreed in opposite directions because SAM
+segmented a different thing each time:
+
+| label | px | centroid | `bbox.max.z` |
+|---|---|---|---|
+| `table surface` | 196547 (64% of frame) | (0.816, −0.004, **0.007**) | **0.517** — back wall |
+| `table` | 23549 | (1.608, 0.383, **−0.768**) — legs, floor | **0.002** |
+
+True tabletop is −0.00137. Trust `max.z` and the first scan releases into the
+air; trust the centroid and the second drives 72 cm *through* the table (the
+live run commanded z = −0.561 and burned five silent `ACTION_ABORTED` retries).
+
+So `surface` reads **neither**. Height comes from `target.bbox_min.z` — the
+object is already standing on the plane being placed onto, which is physics
+rather than statistics, and was within 1.4 mm on both scans
+(`standing_plane_z`). XY is anchored on the **target's current centroid** too;
+the destination sets only *how far* to shift, never *where from*. `container`
+keeps `max.z`, where the extreme genuinely is the rim, and `place_beside`
+(relations) keeps anchoring on the destination centroid — for a phone or a
+basket that centroid really is the spot to place at.
+
+Two consequences worth stating plainly:
+
+- The honest description of a region is **"shift the object toward the named
+  side"**, not "place it at the table's left edge". A target already near an
+  edge can be pushed off it; nothing measures the surface well enough to
+  prevent that.
+- `region_frac` (0.6 of the destination's half-extent, less the target's own
+  support) is clamped to `[side_offset_m, region_max_offset_m]`, and on a real
+  table the clamp is always what comes out — the far half of a table is outside
+  the arm's reach. **The live scene exercises the ceiling, not the scaling.**
+  Scaling is covered by gtest only.
+
+`center` is the one region still anchored on the destination centroid, with all
+of that centroid's unreliability — it names no direction, so there is nothing to
+shift the target by. Untested live.
+
 `near` is direction-aware: it offsets from the destination centroid *toward the
 target's current centroid*, by (both XY footprint supports + `near_clearance_m`),
 floored at `near_offset_m`. The object lands on the side it is already on —
@@ -376,9 +417,50 @@ because `near` is also where an empty or unrecognised `relation` lands. An
 unknown/empty `type` resolves the same way; it used to take **no branch at all**
 and return the raw centroid, burying the object inside the destination.
 
+**Place is a two-leg move, mirroring `pre_grasp → grasp`.** `min_path_z` is a
+box constraint over the whole path *including the goal*, so a floor above the
+release point is unsatisfiable and reports only `ACTION_ABORTED` — outwardly
+identical to an unreachable pose. `UpdateTargetPose` therefore publishes
+`pre_place_pose` (the release point raised to transit height) and the tree flies
+there under the floor, then descends to `place_pose` with no floor at all.
+`MoveAction` now refuses a floor above its own goal with an ERROR rather than
+letting the planner fail obscurely.
+
+The floor itself is per-object: `carry_path_z = carry_clearance_m +
+carry_lift()`, where the lift is `(link8 above the object's centre) + (its
+half-height)`. `min_path_z` constrains **link8**, but the thing that must clear
+the scene is the object hanging below it — with a book that is 0.157 m, so the
+old constant 0.15 dragged its underside along at z = −0.007, table height, and
+straight through a 0.1 m glass.
+
 Place reuses the **grasp's yaw** (`place_keep_grasp_yaw`, default true) so the
 wrist does not twist the held object in transit. Set false for a fixed
 straight-down pose if a place turns out to be unreachable.
+
+**Place steers around tabletop clutter.** The geometric offset knows only
+directions and footprint sizes, so "the left side of the table" is just as happy
+to land on the apple. `nudge_to_free_space()` ring-scans outward from the ideal
+point for the nearest spot that clears every obstacle footprint by
+`place_clearance_m` and stays inside `max_place_reach_m`. Obstacles come from
+`/world_map_result`'s `obstacles` (see mask_projection_pkg above); the target
+and destination are filtered out by centroid proximity, since the extractor
+separates by height and cannot tell them apart. Finding nothing clear within
+`place_search_radius_m` logs a WARN and places at the requested point anyway
+rather than failing — the arm is holding the object, and keeping hold of it is
+recoverable while stacking it on something is not. **The glass cup is invisible
+to this**, so avoidance covers the other objects only.
+
+This is placement only. Nothing injects these obstacles into the MoveIt
+planning scene, so the *path* still ignores them — that is what the transit
+height (`carry_path_z`) is standing in for.
+
+**Reach is clamped on the result, not just the shift.** Every branch sizes its
+offset from measured geometry, which has repeatedly landed outside the
+workspace ("behind the phone" → XY radius 0.853 against a 0.855 spec reach,
+five silent retries). `max_place_reach_m` (0.80) shortens an over-reaching shift
+along its own anchor→place direction, preserving the named direction, rather
+than scaling XY toward the base. That guard is what lets `region_max_offset_m`
+be generous (0.45).
 
 `retreat_pose` is owned by `SelectGraspCandidate`, not `ParseScene` — it must
 follow the candidate actually selected, or a retry retreats along the *first*
@@ -431,6 +513,37 @@ mask → projector → graspgen chain completes.
 | `projector_node.py` | Single-camera Gazebo demo — do not modify |
 
 Two-pass filtering: Pass 1 removes Top UNKNOWN points within 1.5 cm XY + 10 cm Z of EE-segmented points. Pass 2 removes EE FREE points that overlap Top UNKNOWN (UNKNOWN > FREE priority).
+
+**Tabletop clutter is found by HEIGHT, not by category.** A "table" mask covers
+everything standing on it, so those objects inherit DESTINATION: one scan put
+197 k points there spanning z to 0.516 and left 172 in UNKNOWN. So
+`extract_tabletop_obstacles()` takes DESTINATION + UNKNOWN, keeps what stands
+2 cm proud of the support plane, and 8-connects it on a 2 cm grid. The support
+plane comes from `target.bbox_min.z` — the object is standing on it, which is
+physics, whereas a surface mask's own z is whatever the mask leaked onto.
+`arm_top_z` drops the robot, which the overhead view sees as a tall narrow
+column (84 points at (0.469, 0.007) reaching z = 0.400; table objects top out
+near 0.13). Output goes to `/world_map_result` as an additive `obstacles` list
+— every existing key keeps its meaning, so graspgen is unaffected.
+
+Validated against the 2026-08-11 scan: basket, book, apple, red ball and phone
+all recovered within 5–74 mm of their measured positions, arm correctly dropped.
+
+**The glass cup is NOT in that list, and that is the one that matters.** It is
+transparent, returns no depth, and is therefore absent from the cloud entirely
+— the obstacle most needing avoidance is the one the geometry cannot find.
+SwinDRNet does not rescue this: it is fine-tuned (`cup_ft_v3`, one scene) on
+**252 px cup-centred crops of the wrist view**, while obstacles are measured
+from the overhead view at z = 2.0 over the whole frame. Running it there is an
+untested domain shift, not a fix. `obstacles_from_boxes()` exists for this —
+intersect the overhead 2D box's corner rays with the support plane, giving XY
+with `top_z: null` — but it is **not wired up**: `qwen_bridge` discards OBSTACLE
+detections (`keep_only(top_objects, "DESTINATION")`), and passing them through
+shifts the detections-array indices that `sam_mask_node` uses AS mask values.
+
+Tests: `cd ros_pkgs/src/mask_projection_pkg && python3 -m pytest test/ -q`.
+`colcon test` does not collect them for this package (pre-existing setup issue,
+reports "NO TESTS RAN").
 
 ### graspgen_pkg internals
 

@@ -79,7 +79,13 @@ def _build_user_prompt(instruction: str, width: int, height: int) -> str:
         f"Instruction: {instruction}\n\n"
         "Do all of the following:\n\n"
         "1. Detect every distinct manipulable object in the image. For each, give\n"
-        "   a short noun label, a tight bounding box, and a confidence.\n\n"
+        "   a short noun label, a tight bounding box, and a confidence.\n"
+        "   IMPORTANT: if the instruction names a surface or container to place\n"
+        "   on or in — a table, tray, shelf, counter — include THAT as an object\n"
+        "   too, with its own box, even though it is scenery rather than\n"
+        "   something to pick up. Step 3 requires its label to appear in this\n"
+        "   list, and without a box there is nothing to segment and the robot\n"
+        "   has nowhere to place.\n\n"
         "2. Classify each object as exactly one of:\n"
         "     TARGET      - the single object the robot must pick up\n"
         "     DESTINATION - the single object/surface it must be placed at\n"
@@ -95,7 +101,10 @@ def _build_user_prompt(instruction: str, width: int, height: int) -> str:
         f"     region (surface only): one of {list(DEST_REGIONS)}\n"
         f"     relation (relation only): one of {list(DEST_RELATIONS)}\n"
         "     reference_label: the label string of the destination object,\n"
-        "       exactly as it appears in your objects list.\n\n"
+        "       exactly as it appears in your objects list. If you named a\n"
+        "       destination here, step 1's list MUST contain it — a destination\n"
+        "       with no matching detection is the one failure that silently\n"
+        "       disables placing.\n\n"
         "If the instruction does NOT say where to put the object (e.g. 'pick up\n"
         "the book'), OMIT the destination field entirely and classify nothing as\n"
         "DESTINATION. Do not invent a destination.\n\n"
@@ -246,17 +255,18 @@ def ground(
         confidence=raw.get("confidence", 1.0),
     )
 
-    labels = {d.label for d in objects}
+    # No destination warning here. parse() sees ONE view, and under dual-view
+    # the destination belongs to the other one: the wrist call legitimately has
+    # no "table" among its detections, because to the wrist camera the table is
+    # background. Warning from here fired on every overhead-only destination —
+    # exactly the case dual-view exists for — and said "place phase will have no
+    # pose" while the place was in fact succeeding. A warning that cries wolf on
+    # the normal path is worse than none, because it hides the real failure.
+    #
+    # `has_destination` below reports the fact; the caller, which knows how many
+    # views it ran, decides whether that is a problem. qwen_bridge checks the
+    # merged pair (`dual and not top_has_dest`), qwen_cli checks its single view.
     meta_warn = ""
-    if grounding.destination is not None:
-        # The named destination must exist among the detections, or sam_a100 has
-        # no box to segment and bt_pkg has no centroid to place at.
-        if grounding.destination.reference_label not in labels:
-            meta_warn = (
-                f"destination.reference_label="
-                f"{grounding.destination.reference_label!r} is not among "
-                f"detected labels {sorted(labels)} — place phase will have no pose"
-            )
 
     if n_dropped:
         drop_note = (

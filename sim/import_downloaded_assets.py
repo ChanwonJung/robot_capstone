@@ -17,6 +17,12 @@ INPUTS = {
     "Apple": DOWNLOADS_DIR / "Apple.glb",
     "Red_Ball": DOWNLOADS_DIR / "red-ball.glb",
     "Basket": DOWNLOADS_DIR / "minecart.glb",
+    # poly.pizza/m/1L9oJAw6nY2 — "Phone" by Alex Safayan, CC-BY 3.0.
+    # Chosen over the other phone GLB in Downloads because it is 11.7% thick
+    # (vs 6.6%) and multi-coloured: from the overhead camera 2 m up a phone is
+    # only ~50x25 px, and thickness-shadow plus a dark screen against a lighter
+    # body are the only cues that survive that downsampling.
+    "Phone": DOWNLOADS_DIR / "Phone by Alex Safayan - 1L9oJAw6nY2.glb",
 }
 OUTPUT_DIR = SIM_DIR / "assets" / "imported"
 
@@ -47,11 +53,28 @@ async def main():
     enable_extension("omni.kit.asset_converter")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    missing = [str(path) for path in INPUTS.values() if not path.exists()]
+    # Only convert what is not already there. The USDs under assets/imported/
+    # are TRACKED IN GIT, and re-converting an unchanged GLB rewrites the file
+    # byte-for-byte differently, so an unconditional pass dirties the working
+    # tree with four functionally identical assets every time someone adds one.
+    # Delete the .usd to force a regeneration.
+    todo = {
+        name: source
+        for name, source in INPUTS.items()
+        if not (OUTPUT_DIR / f"{name}.usd").exists()
+    }
+    skipped = sorted(set(INPUTS) - set(todo))
+    if skipped:
+        print(f"Already converted, skipping: {', '.join(skipped)}")
+    if not todo:
+        print("Nothing to do.")
+        return
+
+    missing = [str(path) for path in todo.values() if not path.exists()]
     if missing:
         raise FileNotFoundError(f"Missing input assets: {missing}")
 
-    for name, source in INPUTS.items():
+    for name, source in todo.items():
         target = OUTPUT_DIR / f"{name}.usd"
         print(f"Converting {source} -> {target}")
         ok = await convert(source, target)
