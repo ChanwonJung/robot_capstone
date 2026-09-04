@@ -38,13 +38,11 @@ echo "  venv : ${VENV_SITE}"
 
 # ── SSH tunnels ───────────────────────────────────────────────────────────────
 # Active target: aurora-g6 (KHU cluster), via the campus jump host.
-# 1. Qwen (SGLang)        → localhost:8000
-# 2. Perception gateway   → localhost:9000  (unifies SAM2 + GraspGen + SwinDRNet
-#                            behind one HTTP port — see services/gateway.sh on
-#                            the cluster side. Direct per-service ports 8001
-#                            [SAM2], 8002 [SwinDRNet], 5556 [GraspGen ZMQ] are
-#                            only reachable if those are run standalone instead
-#                            of through all_in_one.sh.)
+# Four direct per-service tunnels — no gateway; each model owns a port.
+# 1. Qwen3.5-27B (full bf16, SGLang, TP=4)  → localhost:10000
+# 2. SAM 2.1 (point/box segmentation)       → localhost:20000
+# 3. SwinDRNet (depth restoration)          → localhost:30000
+# 4. GraspGen (ZMQ REP, 6-DOF grasping)     → localhost:40000
 
 _SKIP_TUNNEL="${SKIP_A100_TUNNEL:-0}"
 for _arg in "$@"; do
@@ -105,8 +103,10 @@ if [ "${_SKIP_TUNNEL}" = "1" ]; then
     echo "[launch_env] aurora-g6 SSH tunnels skipped (--no-tunnel / SKIP_A100_TUNNEL=1)"
 else
     _TUNNEL_FAILS=0
-    _open_tunnel 8000 "Qwen (SGLang)"        -L 8000:127.0.0.1:8000 -J "${_KHU_JUMP}" "${_AURORA_HOST}" || _TUNNEL_FAILS=$((_TUNNEL_FAILS + 1))
-    _open_tunnel 9000 "Perception gateway"   -L 9000:127.0.0.1:9000 -J "${_KHU_JUMP}" "${_AURORA_HOST}" || _TUNNEL_FAILS=$((_TUNNEL_FAILS + 1))
+    _open_tunnel 10000 "Qwen (SGLang)"  -L 10000:127.0.0.1:10000 -J "${_KHU_JUMP}" "${_AURORA_HOST}" || _TUNNEL_FAILS=$((_TUNNEL_FAILS + 1))
+    _open_tunnel 20000 "SAM 2.1"        -L 20000:127.0.0.1:20000 -J "${_KHU_JUMP}" "${_AURORA_HOST}" || _TUNNEL_FAILS=$((_TUNNEL_FAILS + 1))
+    _open_tunnel 30000 "SwinDRNet"      -L 30000:127.0.0.1:30000 -J "${_KHU_JUMP}" "${_AURORA_HOST}" || _TUNNEL_FAILS=$((_TUNNEL_FAILS + 1))
+    _open_tunnel 40000 "GraspGen"       -L 40000:127.0.0.1:40000 -J "${_KHU_JUMP}" "${_AURORA_HOST}" || _TUNNEL_FAILS=$((_TUNNEL_FAILS + 1))
 
     if [ "${_TUNNEL_FAILS}" -ne 0 ]; then
         echo "[launch_env] ⚠ ${_TUNNEL_FAILS} tunnel(s) unavailable — the"
@@ -117,7 +117,7 @@ else
 
     # ── OLD: all four services on the A100 (tta@123.37.28.208) ───────────────
     # Kept in case the model(s) move back there. Direct single-hop, no jump
-    # host needed. Swap the two lines above for this block:
+    # host needed. Swap the four lines above for this block:
     #
     # _A100_HOST="tta@123.37.28.208"
     # _open_tunnel 8000 "Qwen vLLM"  -L 8000:127.0.0.1:8000 "${_A100_HOST}"
