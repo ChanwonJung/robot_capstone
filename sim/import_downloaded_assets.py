@@ -23,6 +23,15 @@ INPUTS = {
     # only ~50x25 px, and thickness-shadow plus a dark screen against a lighter
     # body are the only cues that survive that downsampling.
     "Phone": DOWNLOADS_DIR / "Phone by Alex Safayan - 1L9oJAw6nY2.glb",
+    # Transparent-object depth-restoration study (2026-09) — CC-BY/CC0 glassware,
+    # sourced via Sketchfab (see git history for the exact model URLs/authors).
+    "Glass_Bowl": DOWNLOADS_DIR / "glass_bowl.glb",
+    "Glass_Jar": DOWNLOADS_DIR / "transparent_glass_jar_with_green_lid_-_3d_model.glb",
+    "Glass_Mug": DOWNLOADS_DIR / "glass_mug.glb",
+    # Multi-object pack (108 nodes, ~40 glasses + 10 bottles) — converted whole;
+    # the specific bottle sub-prim is picked afterward from the resulting USD's
+    # prim tree (mesh names in the source are all generic "Cylinder.NNN").
+    "Glass_Bottle_Pack": DOWNLOADS_DIR / "the_ultimate_glass_pack_cups_and_bottles.glb",
 }
 OUTPUT_DIR = SIM_DIR / "assets" / "imported"
 

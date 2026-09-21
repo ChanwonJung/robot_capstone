@@ -171,6 +171,86 @@ PHONE_SCALE = np.array([0.188, 0.188, 0.188]) * _TABLETOP_SCALE
 # 마찰력 F = μ·N 이라 무게가 가벼우면 적은 grip force 로도 안 미끄러짐.
 BOOK_MASS = 0.15
 
+# ── 투명물체 depth-restoration 실험용 유리 3종 (2026-09) ─────────────────────
+# Sketchfab CC-BY, GLB→USD 변환은 sim/import_downloaded_assets.py 로 함.
+# ★ 아래 배치는 diag_asset_bbox.py 로 잰 원본 bbox 로만 역산한 1차 추정치다.
+# 사과/공/폰 때처럼 회전 부호(90 vs -90)나 비주얼-콜라이더 XY 정렬이 실측 전엔
+# 틀릴 수 있다 — Isaac Sim 에서 직접 보고 필요하면 위 두 항목(ROTATION_DEG 부호,
+# 필요시 VISUAL_TRANSLATE 추가)부터 고칠 것. 콜라이더는 그 불확실성을 피하려고
+# 이상화한 도형이 아니라 비주얼 메쉬 자체에서 convexHull 로 뽑는다(바구니와 동일
+# 전략) — 비주얼이 어디 있든 콜라이더가 항상 따라가므로 피벗 오차가 안 남는다.
+
+GLASS_BOTTLE_PACK_ASSET = IMPORTED_ASSETS_DIR / "Glass_Bottle_Pack.usd"
+# 팩 안 55개 leaf mesh 중 height/diameter 비율(3.22, 가장 병처럼 길쭉함)로 고른 것.
+# 나머지 후보는 diag_asset_bbox.py 출력 참고 — 컵/잔 계열은 이 비율이 훨씬 낮다.
+GLASS_BOTTLE_PRIM_PATH = (
+    "/World/node_93c05a82ce5435ea57e7f1b8c8ee88d_fbx/RootNode/Cylinder_042"
+    "/Cylinder_042_Material_0/Cylinder_042_Material_0"
+)
+GLASS_BOWL_ASSET = IMPORTED_ASSETS_DIR / "Glass_Bowl.usd"
+GLASS_JAR_ASSET = IMPORTED_ASSETS_DIR / "Glass_Jar.usd"
+GLASS_MUG_ASSET = IMPORTED_ASSETS_DIR / "Glass_Mug.usd"
+
+# 원본(Y-up, 미터 아닌 임의 unit) bbox 실측:
+#   Bottle(Cylinder_042): size(1.4599, 4.6950, 1.4599) y_min≈0 (원점=바닥, 컵과 같은 편한 케이스)
+#   Bowl  (전체):         size(1.4884, 0.9743, 1.4951) y_min=-0.6937 (원점이 바닥보다 위)
+#   Jar   (전체):         size(0.7088, 0.9601, 0.7102) y_min= 0.2392 (원점이 바닥보다 아래)
+# Y-up → 씬의 Z-up 으로 옮기는 회전은 사과와 같은 X+90 을 1차로 쓴다(Rx(+90): y→z).
+# 그 변환에서 로컬 y_min 이 root 기준 z 오프셋이 되므로, 상판 접지 z 는
+#   root_z = TABLE_SURFACE_Z(0.72863) - y_min * scale
+# 로 역산했다 (y_min>0 이면 바닥이 원점보다 위이므로 root 를 낮춤, 음수면 올림).
+# ★ Bottle 만 회전이 다르다 — prim_path 로 leaf mesh 하나만 참조하면(Bowl/Jar 와
+# 달리 파일 전체 defaultPrim 을 참조하는 게 아니라서) 조상 Xform 들의 회전이 전혀
+# 안 딸려온다. 이 메쉬는 raw extent 로 봤을 때 이미 로컬 Z 축이 높이축(Z: -3.19~
+# 1.50, span 4.695 = height/diameter 비율 3.22 그대로)이라, 씬의 Z-up 과 그대로
+# 맞는다 — 무회전이 정답이었다(90 회전을 주면 옆으로 눕는다, 실측 확인).
+GLASS_BOTTLE_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
+GLASS_BOWL_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
+GLASS_JAR_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
+
+# 지름 56mm(그리퍼 80mm 안쪽, 몸통 파지 가능) 목표. 높이(Z)는 무회전이라 직접
+# 스케일 반영돼 180mm 로 실측 정확히 맞았지만, X/Y(지름)는 실측하니 74.4mm 로
+# 나와서(변환기가 raw glTF accessor 에 없던 unit 보정을 추가로 먹인 것으로 보임 —
+# 원인 확정은 못 했고 diag_verify_glass_props.py 실측으로 역산해 고쳤다) X/Y 만
+# 0.03834*(56/74.4) 로 축소. Z 는 이미 정확해서 그대로 둔다.
+GLASS_BOTTLE_SCALE = np.array([0.02885, 0.02885, 0.03834])
+# 무회전이라 raw local z_min(-3.194) 이 그대로 world 오프셋이 된다.
+GLASS_BOTTLE_TRANSLATE = np.array([-2.6657, 3.0857, 0.72863 + 3.194 * 0.03834])
+
+# 지름 150mm(그리퍼 80mm 초과 — 유리컵과 같은 림 파지 전제, "빈 속" 위상 필요).
+# ★ 균등 스케일 0.10033 으로 1차 계산했더니 실측 지름 264mm, 높이 130mm 로 목표
+# (150mm/97.7mm) 보다 한참 컸다 — Bottle 과 마찬가지로 변환기의 unit 보정으로
+# 추정되는 배율이 축마다 다르게 껴 있어서(지름 비율 1.76 vs 높이 비율 1.328,
+# 안 같음 — 균등 스케일로는 못 고친다) X/Z(지름)와 Y(높이)를 실측 기반으로 따로
+# 축소했다. 회전이 X+90 이라 world 매핑은 X→X, Y→world Z(높이), Z→world Y(지름).
+GLASS_BOWL_SCALE = np.array([0.0570, 0.0755, 0.0570])
+# world Z(높이)를 좌우하는 성분(scale[1]=Y)이 0.10033→0.0755 로 바뀌었으므로,
+# 이전 실측 보정 오프셋(0.6937*0.10033+0.0247=0.09430)도 같은 비율로 스케일했다.
+GLASS_BOWL_TRANSLATE = np.array([-1.9213, 2.6944, 0.72863 + 0.09430 * (0.0755 / 0.10033)])
+
+# 지름 80mm(그리퍼 한계선 — 몸통 파지 안 되면 림/목 파지로 넘어갈 후보).
+# 실측 지름 106mm(목표比 1.328, Bottle 과 같은 배율 — 이쪽은 높이는 이미 정확했다)
+# 라 X/Z(지름) 만 축소. Y(높이, world Z 를 좌우) 는 그대로 둬서 Z-translate 도 불변.
+GLASS_JAR_SCALE = np.array([0.0848, 0.11265, 0.0848])
+GLASS_JAR_TRANSLATE = np.array([-2.11, 2.92, 0.72863 - 0.2392 * 0.11265])
+
+# 손잡이 컵(Glass Mug) — 2026-09 추가. 원본 bbox: X 20.36 / Y 26.07(=높이, y_min=2.30)
+# / Z 29.37. h/d = 26.07/29.37 = 0.887 (Bowl/Jar 와 같은 Y-up → X+90 회전 가정).
+# 지름 80mm 목표 — 기존 유리컵(68mm)과 달리 몸통을 그리퍼로 못 감싸도 된다(손잡이
+# 파지가 목적이라 애초에 몸통 그립을 전제하지 않음). Bottle/Bowl/Jar 모두 균등
+# 스케일 예측이 실측과 어긋났으므로(변환기 unit 보정) 이 값도 diag_verify_glass_props.py
+# 로 확인 후 X/Z(지름)와 Y(높이)를 따로 보정해야 할 가능성이 높다 — 1차 추정치.
+GLASS_MUG_SCALE = np.array([0.002724, 0.002724, 0.002724])
+GLASS_MUG_ROTATION_DEG = np.array([90.0, 0.0, 0.0])
+GLASS_MUG_TRANSLATE = np.array([-2.4938, 3.0971, 0.72863 - 2.3017 * 0.002724])
+
+# 유리이므로 다른 유리컵(0.18kg)과 비슷한 대역의 1차 추정치. 파지 시 미끄러지면
+# 유리컵처럼 gripper force 를 낮추는 쪽으로 튜닝할 것(무게보다 grip force 가 결정적이었음).
+GLASS_BOTTLE_MASS = 0.15
+GLASS_BOWL_MASS = 0.20
+GLASS_JAR_MASS = 0.20
+GLASS_MUG_MASS = 0.20
+
 # Hazard placeholders for Fast Brain testing. Procedural for now; positions
 # spawn outside the top-view FOV and have initial velocity so the hazards "fly
 # in" toward the workspace when the simulation plays. Tune in viewport, then
@@ -339,7 +419,19 @@ HAZARD_OBJECT_PATHS = {
 TOP_CAMERA_POSITION = np.array([0.0, 0.2, 2.0])
 TOP_CAMERA_ROTATION_DEG = np.array([0.0, 0.0, 0.0])
 TOP_CAMERA_FOCAL_LENGTH_MM = 4.0
-EE_CAMERA_PATH = "/Franka/panda_hand/EEViewCameraMount/CameraRig/CameraFrame/EEViewCamera"
+# Kinova Gen3 + Robotiq 2F-85 (URDF-imported, sim/kinova_urdf/gen3_isaac.xacro) 의
+# 실제 링크 계층은 URDF 체인을 그대로 따라가서 Franka 때보다 훨씬 깊다
+# (/Kinova/Geometry/world/base_link/.../end_effector_link/robotiq_85_base_link).
+# get_ee_mount_prim() 이 WRIST_MOUNT_CANDIDATES 로 이 경로를 런타임에 찾아내지만,
+# EE_CAMERA_PATH 는 create_ee_camera() 가 그 위에 실제로 짓는 경로와 반드시
+# 일치해야 하는 별도 상수라 여기도 전체 경로를 그대로 적어둔다.
+KINOVA_ARTICULATION_ROOT_PATH = "/Kinova/Geometry/world/base_link"
+KINOVA_ROBOTIQ_BASE_LINK_PATH = (
+    f"{KINOVA_ARTICULATION_ROOT_PATH}/shoulder_link/half_arm_1_link/half_arm_2_link/"
+    "forearm_link/spherical_wrist_1_link/spherical_wrist_2_link/bracelet_link/"
+    "end_effector_link/robotiq_85_base_link"
+)
+EE_CAMERA_PATH = f"{KINOVA_ROBOTIQ_BASE_LINK_PATH}/EEViewCameraMount/CameraRig/CameraFrame/EEViewCamera"
 TOP_CAMERA_PATH = "/World/TopViewCamera"
 CAMERA_SENSOR_SCOPE = "/World/CameraSensors"
 EE_DEPTH_SCOPE = f"{CAMERA_SENSOR_SCOPE}/EEViewDepth"
@@ -348,11 +440,15 @@ EE_VIEWPORT_NAME = "EE View"
 TOP_VIEWPORT_NAME = "Top View"
 EE_VIEWPORT_RESOLUTION = (640, 480)
 TOP_VIEWPORT_RESOLUTION = (640, 480)
-WRIST_MOUNT_CANDIDATES = ["panda_hand", "panda_link7", "panda_link6"]
-EE_MOUNT_FALLBACK_CANDIDATES = ["panda_hand", "gripper_center", "tool0", "ee_link", "right_gripper"]
+WRIST_MOUNT_CANDIDATES = ["robotiq_85_base_link", "end_effector_link", "bracelet_link"]
+EE_MOUNT_FALLBACK_CANDIDATES = ["gripper_center", "tool0", "ee_link", "right_gripper"]
 EE_CAMERA_MOUNT_TRANSLATE = np.array([0.000, 0.0, 0.030])
 EE_CAMERA_LOCAL_TRANSLATE = np.array([0.095, 0.0, -0.030])
-EE_CAMERA_LOCAL_ROTATION_DEG = np.array([-160.0, 0.0, 90.0])
+# 2026-09 Kinova Gen3 — robotiq_85_base_link 의 로컬 축 컨벤션이 Panda panda_hand
+# 와 달라서 그 값(-160,0,90)을 그대로 못 쓴다. robotiq_85_base_link 의 실측 월드
+# 회전행렬 + Home 포즈에서의 카메라 위치로부터, 대략적인 테이블 목표점을 보도록
+# 역산한 시작값 — 정밀 조정은 라이브로 EE View 보면서 재검증 필요.
+EE_CAMERA_LOCAL_ROTATION_DEG = np.array([108.0, 0.0, 180.0])
 TABLETOP_OBJECT_PATHS = {
     "Apple": "/World/CapstoneAdditions/TabletopItems/Apple",
     "Glass": "/World/CapstoneAdditions/TabletopItems/Glass",
@@ -365,7 +461,7 @@ TABLETOP_OBJECT_PATHS = {
 DEPTH_OVERLAY = None
 TOP_VIEW_ROS_BRIDGE = None
 EE_VIEW_ROS_BRIDGE = None
-FRANKA_JOINT_ROS_BRIDGE = None
+KINOVA_JOINT_ROS_BRIDGE = None
 
 
 def set_xform(prim, translate=None, rotate_xyz_deg=None, scale=None):
@@ -385,10 +481,24 @@ def define_xform(stage, path, translate=None, rotate_xyz_deg=None, scale=None):
     return prim
 
 
-def add_visual_reference(stage, path, asset_path, translate=None, rotate_xyz_deg=None, scale=None):
+def add_visual_reference(stage, path, asset_path, translate=None, rotate_xyz_deg=None, scale=None,
+                          prim_path=None):
+    """prim_path: 참조 파일의 defaultPrim 대신 그 안의 특정 서브프림 하나만 참조하고
+    싶을 때 쓴다 (예: 다중 오브젝트 팩에서 특정 병 하나만 골라 쓰는 경우).
+
+    ★ prim_path 로 가리키는 대상이 Mesh 타입인 경우, path 자체를 Xform 으로 먼저
+    선언한 뒤 그 위에 곧바로 레퍼런스를 걸면 로컬 "Xform" 스펙이 참조로 들어온
+    "Mesh" 타입을 가려버려(강도상 로컬 레이어가 이김) 자식도 0개, Mesh API 도
+    무효가 된다(실측 확인 — UsdGeom.Mesh(prim) 이 False). 그래서 prim_path 를 쓸
+    때는 transform 용 Xform 을 만들고, 레퍼런스는 그 자식(Ref)에 걸어 타입 충돌을
+    피한다. 파일 전체(defaultPrim=Xform)를 참조하는 기존 경로는 그대로 둔다."""
     prim = stage.DefinePrim(path, "Xform")
     prim.GetReferences().ClearReferences()
-    prim.GetReferences().AddReference(str(asset_path))
+    if prim_path:
+        ref_prim = stage.DefinePrim(f"{path}/Ref")
+        ref_prim.GetReferences().AddReference(assetPath=str(asset_path), primPath=Sdf.Path(prim_path))
+    else:
+        prim.GetReferences().AddReference(str(asset_path))
     set_xform(prim, translate=translate, rotate_xyz_deg=rotate_xyz_deg, scale=scale)
     return prim
 
@@ -601,6 +711,79 @@ def build_glass(stage, path):
     return root
 
 
+def bind_omniglass_material(stage, mesh_root, material_path):
+    """OmniGlass MDL 셰이더로 새 머티리얼을 만들어 mesh_root 밑의 모든 Mesh 에
+    강제로 바인딩한다. 소스 GLB 의 원래 머티리얼이 뭐든 — 불투명 텍스처든, 참조
+    범위 밖이라 드롭됐든(GlassBottle 이 실제로 이 케이스였다: primPath 로 leaf
+    mesh 하나만 참조하니 그 머티리얼이 있던 /World/Looks/Material 은 참조 범위
+    밖이라 "Ignoring" 경고와 함께 빠졌고, 결과적으로 기본 회색 불투명 렌더링이
+    됐다) — 무시하고 유리로 렌더링되게 한다. 기존 컵(P_Glassware)도 같은
+    OmniGlass.mdl 을 쓴다 (diag_glass_material.py 로 확인한 실제 셰이더 구조).
+    파라미터를 하나도 안 건드리면 MDL 기본값(투명, IOR 1.491)이 그대로 적용된다."""
+    mat = UsdShade.Material.Define(stage, material_path)
+    shader = UsdShade.Shader.Define(stage, f"{material_path}/Shader")
+    shader.SetSourceAsset("OmniGlass.mdl", "mdl")
+    shader.SetSourceAssetSubIdentifier("OmniGlass", "mdl")
+    mat.CreateSurfaceOutput("mdl").ConnectToSource(shader.ConnectableAPI(), "out")
+    for prim in Usd.PrimRange(mesh_root):
+        if prim.GetTypeName() == "Mesh":
+            binding = UsdShade.MaterialBindingAPI.Apply(prim)
+            binding.Bind(mat, bindingStrength=UsdShade.Tokens.strongerThanDescendants)
+    return mat
+
+
+def _build_glass_prop(stage, path, asset_path, translate, rotate_xyz_deg, scale, mass, prim_path=None):
+    """유리 3종(Bottle/Bowl/Jar) 공용 빌더. 콜라이더는 이상화 도형이 아니라
+    비주얼 메쉬에서 직접 convexHull 로 뽑는다 — 이 오브젝트들은 피벗/회전 부호가
+    아직 실측 검증 전이라, 손으로 지정한 콜라이더 도형은 비주얼과 어긋날 위험이
+    크다. convexHull 은 비주얼이 어디 있든 항상 따라가므로 그 문제를 피한다.
+
+    머티리얼은 소스 GLB 것을 신뢰하지 않고 OmniGlass 로 강제 바인딩한다 — 형태만
+    보고 고른 에셋들이라(bind_omniglass_material 참고) 처음부터 투명하게 나온다."""
+    root = create_dynamic_body_root(stage, path, translate, mass=mass)
+    visual = add_visual_reference(
+        stage,
+        f"{path}/Visual",
+        asset_path,
+        rotate_xyz_deg=rotate_xyz_deg,
+        scale=scale,
+        prim_path=prim_path,
+    )
+    apply_static_collider(visual, approximation="convexHull")
+    set_double_sided(visual)
+    bind_omniglass_material(stage, visual, f"{path}/Looks/Glass")
+    return root
+
+
+def build_glass_bottle(stage, path):
+    return _build_glass_prop(
+        stage, path, GLASS_BOTTLE_PACK_ASSET, GLASS_BOTTLE_TRANSLATE,
+        GLASS_BOTTLE_ROTATION_DEG, GLASS_BOTTLE_SCALE, GLASS_BOTTLE_MASS,
+        prim_path=GLASS_BOTTLE_PRIM_PATH,
+    )
+
+
+def build_glass_bowl(stage, path):
+    return _build_glass_prop(
+        stage, path, GLASS_BOWL_ASSET, GLASS_BOWL_TRANSLATE,
+        GLASS_BOWL_ROTATION_DEG, GLASS_BOWL_SCALE, GLASS_BOWL_MASS,
+    )
+
+
+def build_glass_jar(stage, path):
+    return _build_glass_prop(
+        stage, path, GLASS_JAR_ASSET, GLASS_JAR_TRANSLATE,
+        GLASS_JAR_ROTATION_DEG, GLASS_JAR_SCALE, GLASS_JAR_MASS,
+    )
+
+
+def build_glass_mug(stage, path):
+    return _build_glass_prop(
+        stage, path, GLASS_MUG_ASSET, GLASS_MUG_TRANSLATE,
+        GLASS_MUG_ROTATION_DEG, GLASS_MUG_SCALE, GLASS_MUG_MASS,
+    )
+
+
 def build_basket(stage, path):
     root = define_xform(
         stage,
@@ -704,12 +887,14 @@ def build_tabletop_items(stage, root_path):
     if stage.GetPrimAtPath(root_path):
         stage.RemovePrim(root_path)
     props_root = define_xform(stage, root_path, translate=BEDSIDE_TABLE_POSITION, rotate_xyz_deg=BEDSIDE_TABLE_ROTATION_DEG)
-    build_apple(stage, f"{props_root.GetPath()}/Apple")
+    # 2026-09 — 투명물체 depth-restoration 실험을 위해 오파크 클러터(Apple/RedBall/
+    # Book/Basket/Phone)는 빼고 유리 오브젝트만 테이블에 올린다. build_apple 등
+    # 함수 자체는 지워지지 않았다 — 다른 데모/씬으로 되돌릴 때 이 5줄만 복구하면 됨.
     build_glass(stage, f"{props_root.GetPath()}/Glass")
-    build_red_ball(stage, f"{props_root.GetPath()}/RedBall")
-    build_book(stage, f"{props_root.GetPath()}/Book")
-    build_basket(stage, f"{props_root.GetPath()}/Basket")
-    build_phone(stage, f"{props_root.GetPath()}/Phone")
+    build_glass_bottle(stage, f"{props_root.GetPath()}/GlassBottle")
+    build_glass_bowl(stage, f"{props_root.GetPath()}/GlassBowl")
+    build_glass_jar(stage, f"{props_root.GetPath()}/GlassJar")
+    build_glass_mug(stage, f"{props_root.GetPath()}/GlassMug")
     return props_root
 
 
@@ -853,9 +1038,9 @@ def build_hazards(stage, root_path):
     return hazards_root
 
 
-def find_franka_root(stage):
+def find_robot_root(stage):
     for prim in stage.Traverse():
-        if prim.GetName().lower() == "franka":
+        if prim.GetName().lower() == "kinova":
             return prim
     return None
 
@@ -888,12 +1073,15 @@ def fix_table_collision(stage):
     print(f"[table-collision] approximation {before} → none (정확 삼각형 메쉬)")
 
 
-# ── Gripper friction (panda fingers) ──────────────────────────────────────────
+# ── Gripper friction (Robotiq 2F-85 fingertip pads) ───────────────────────────
 # Isaac Sim default PhysX material friction (~0.5) is too low for reliable
 # top-down grasps of flat/thin objects (book). Boost static/dynamic friction
-# on both fingers so closed gripper holds the object during retreat & motion.
+# on both fingertip pads so closed gripper holds the object during retreat & motion.
+# NOTE: static/dynamic friction values below are still the Panda-era numbers,
+# ported over structurally but NOT re-verified against the Robotiq pad geometry —
+# retune against live grasp tests before trusting them.
 
-FINGER_NAME_CANDIDATES = ("panda_leftfinger", "panda_rightfinger")
+FINGER_NAME_CANDIDATES = ("robotiq_85_left_finger_tip_link", "robotiq_85_right_finger_tip_link")
 GRIPPER_FRICTION_MATERIAL_PATH = "/World/PhysicsMaterials/GripperHighFriction"
 GRIPPER_STATIC_FRICTION  = 4.0   # very high — flat book slips easily otherwise
 GRIPPER_DYNAMIC_FRICTION = 3.0   # slightly lower than static
@@ -955,7 +1143,10 @@ def _bind_physics_material(target_prim, material_prim):
     return bound_any
 
 
-# ── Gripper drive strength (panda fingers) ────────────────────────────────────
+# ── Gripper drive strength — Panda 시절 기록 (2026-09 Kinova Gen3 전환으로 지금
+# 아래 코드가 쓰는 값은 아님 — Robotiq 2F-85 튜닝은 더 아래 새 섹션 참고. 다만
+# "힘 = min(stiffness×오차, maxForce)"라는 진단 프레임 자체는 그대로 재사용
+# 가능해서 지우지 않고 남겨둔다) ─────────────────────────────────────────────
 # Isaac 기본 Franka 에셋의 손가락 드라이브는 maxForce=7.2N / stiffness=400 이다.
 # 실제 Franka 그리퍼는 연속 70N 을 내므로 한참 약하다. 유리컵(Ø48mm 콜라이더)에서
 # 관측된 증상: CLOSE 시 손가락이 pos=0.0257m(폭 51.4mm)에서 멈춤 — 컵보다 3.2mm
@@ -998,32 +1189,110 @@ def _bind_physics_material(target_prim, material_prim):
 # 양쪽 손가락이 시차를 두고 134mm/s 로 때려 책이 밀리고 계속 떨렸다. 심하면
 # 하강 중 손가락에 걸려 넘어졌다. 무게는 원인이 아니다 — 필요 압축력은
 # 1.47N/(2×4) = 0.18N 인데 12N 을 걸고 있었다(65배).
-FINGER_JOINT_NAMES = ("panda_finger_joint1", "panda_finger_joint2")
-GRIPPER_DRIVE_STIFFNESS = 1000.0  # 5000 → 1000, 위 주석 참조
-GRIPPER_DRIVE_DAMPING   = 1000.0
-GRIPPER_DRIVE_MAX_FORCE = 12.0    # 50.0 → 12.0, 위 주석 참조
+# ── Kinova Gen3 / Robotiq 2F-85 (2026-09) ─────────────────────────────────────
+# Panda 는 독립 2-프리즈매틱 손가락(drive:linear:...)이었지만 Robotiq 2F-85 는
+# 단일 구동 리볼루트 조인트(robotiq_85_left_knuckle_joint, drive:angular:...)
+# 하나가 나머지 5개 조인트를 NewtonMimicAPI(mimicJoint/mimicCoef1, USD 임포터가
+# 이미 정확히 authoring 해둠 — PhysxMimicJointAPI 는 6.0.1 에서 deprecated 되고
+# NewtonMimicAPI 로 대체됨)로 따라가는 구조라 이 구동 조인트 하나만 튜닝하면 된다.
+# ★ 단위 함정: UsdPhysics RevoluteJoint 의 limit/target 은 라디안이 아니라
+# **도(degree)** 다 — SRDF/URDF 의 Close=0.8rad 은 USD 쪽 upperLimit=45.84° 로
+# 이미 변환되어 들어있다(임포터가 처리함). gripper_action_server 등에서 라디안
+# ↔ 도 변환을 빠뜨리지 않도록 주의.
+# 아래 stiffness/damping 은 임포트 직후 기본값이 0(전혀 안 움직임)이라 최소한
+# 동작은 하도록 새로 채운 시작값일 뿐, Panda 때처럼 실측으로 검증되지 않았다 —
+# 실제 파지 테스트로 반드시 재튜닝할 것. maxForce=50 은 URDF 임포터가 넣어준
+# 값(에셋 기본값)을 그대로 유지.
+GRIPPER_DRIVE_JOINT_NAMES = ("robotiq_85_left_knuckle_joint",)
+GRIPPER_DRIVE_STIFFNESS = 5.0   # 미검증 시작값 — 실측 필요
+GRIPPER_DRIVE_DAMPING   = 5.0   # 미검증 시작값 — 실측 필요
+GRIPPER_DRIVE_MAX_FORCE = 50.0  # 에셋 기본값 유지
+
+
+def fix_gripper_mimic_limits(stage):
+    """NewtonMimicAPI follower 조인트 중 physics:lowerLimit/upperLimit 이 비어있는
+    것들을 구동 조인트(robotiq_85_left_knuckle_joint) 범위로, mimicCoef1 부호에
+    맞춰 채운다.
+
+    URDF 임포터가 robotiq_85_left_inner_knuckle_joint / right_inner_knuckle_joint /
+    left_finger_tip_joint / right_finger_tip_joint 4개에는 limit 을 안 채워
+    넣었는데, PhysX 는 "NewtonMimicAPI follower joint ... without a finite
+    limit" 로 이 4개를 거부한다 — 거부된 조인트는 구속이 안 걸린 채로 남아
+    그리퍼 전체가 겉돌며 빙글빙글 도는 원인이 된다.
+    """
+    robot_root = find_robot_root(stage)
+    if robot_root is None:
+        print("[gripper-mimic-limits] Kinova root not found — skipped")
+        return
+
+    driver = None
+    for prim in Usd.PrimRange(robot_root):
+        if prim.GetName() in GRIPPER_DRIVE_JOINT_NAMES:
+            driver = prim
+            break
+    if driver is None:
+        print("[gripper-mimic-limits] driver joint not found — skipped")
+        return
+    lower_attr = driver.GetAttribute("physics:lowerLimit")
+    upper_attr = driver.GetAttribute("physics:upperLimit")
+    lo = lower_attr.Get() if lower_attr else None
+    hi = upper_attr.Get() if upper_attr else None
+    if lo is None or hi is None:
+        print("[gripper-mimic-limits] driver limit not found — skipped")
+        return
+
+    fixed = []
+    for prim in Usd.PrimRange(robot_root):
+        if not prim.IsA(UsdPhysics.RevoluteJoint):
+            continue
+        mimic_rel = prim.GetRelationship("newton:mimicJoint")
+        if not mimic_rel or not mimic_rel.GetTargets():
+            continue
+        existing_lower = prim.GetAttribute("physics:lowerLimit")
+        # 주의: 미authoring 상태에서도 Get() 은 None 이 아니라 스키마 기본값
+        # (-inf) 를 반환한다 — HasAuthoredValue() 로만 "진짜 authoring 됐는지"
+        # 를 구분할 수 있다. Get() is not None 으로 체크하면 항상 참이라
+        # 정확히 반대로 동작(고쳐야 할 조인트를 계속 건너뜀)한다.
+        if existing_lower and existing_lower.HasAuthoredValue():
+            continue  # 이미 채워져 있음(구동 조인트 자신 포함)
+        coef_attr = prim.GetAttribute("newton:mimicCoef1")
+        coef = coef_attr.Get() if coef_attr and coef_attr.Get() is not None else 1.0
+        joint = UsdPhysics.RevoluteJoint(prim)
+        if coef < 0:
+            joint.CreateLowerLimitAttr().Set(-hi)
+            joint.CreateUpperLimitAttr().Set(-lo)
+        else:
+            joint.CreateLowerLimitAttr().Set(lo)
+            joint.CreateUpperLimitAttr().Set(hi)
+        fixed.append(prim.GetName())
+
+    if fixed:
+        print(f"[gripper-mimic-limits] limit 채움({lo}~{hi} 기준): {fixed}")
+    else:
+        print("[gripper-mimic-limits] 손볼 조인트 없음")
 
 
 def boost_gripper_drive(stage):
-    """손가락 프리즈매틱 조인트의 드라이브 강성/최대힘을 올린다."""
-    franka_root = find_franka_root(stage)
-    if franka_root is None:
-        print("[gripper-drive] Franka root not found — skipped")
+    """그리퍼 구동 리볼루트 조인트의 드라이브 강성/최대힘을 설정한다."""
+    robot_root = find_robot_root(stage)
+    if robot_root is None:
+        print("[gripper-drive] Kinova root not found — skipped")
         return
 
     touched = []
-    for prim in Usd.PrimRange(franka_root):
-        if prim.GetName() not in FINGER_JOINT_NAMES:
+    for prim in Usd.PrimRange(robot_root):
+        if prim.GetName() not in GRIPPER_DRIVE_JOINT_NAMES:
             continue
-        max_force_attr = prim.GetAttribute("drive:linear:physics:maxForce")
+        max_force_attr = prim.GetAttribute("drive:angular:physics:maxForce")
         if not max_force_attr:
-            # joint2 는 보통 mimic joint 라 자체 드라이브가 없다. joint1 만 조이면
-            # mimic 제약이 반대쪽을 따라오므로 건드리지 않는 게 맞다.
-            print(f"[gripper-drive] {prim.GetName()}: linear drive 없음 "
-                  f"(mimic joint 로 추정) — 건너뜀")
+            print(f"[gripper-drive] {prim.GetName()}: angular drive 없음 — 건너뜀")
             continue
-        stiff_attr = prim.GetAttribute("drive:linear:physics:stiffness")
-        damp_attr  = prim.GetAttribute("drive:linear:physics:damping")
+        stiff_attr = prim.GetAttribute("drive:angular:physics:stiffness")
+        if not stiff_attr:
+            stiff_attr = UsdPhysics.DriveAPI.Apply(prim, "angular").CreateStiffnessAttr()
+        damp_attr = prim.GetAttribute("drive:angular:physics:damping")
+        if not damp_attr:
+            damp_attr = UsdPhysics.DriveAPI.Apply(prim, "angular").CreateDampingAttr()
         before = (stiff_attr.Get(), damp_attr.Get(), max_force_attr.Get())
         stiff_attr.Set(GRIPPER_DRIVE_STIFFNESS)
         damp_attr.Set(GRIPPER_DRIVE_DAMPING)
@@ -1035,7 +1304,78 @@ def boost_gripper_drive(stage):
     if touched:
         print("[gripper-drive] " + " | ".join(touched))
     else:
-        print("[gripper-drive] 손가락 조인트를 찾지 못함 — 변경 없음")
+        print("[gripper-drive] 구동 조인트를 찾지 못함 — 변경 없음")
+
+
+# ── Arm joint drive (Kinova Gen3, 2026-09) ────────────────────────────────────
+# URDF 임포터가 joint_1..7 에 drive:angular:physics:maxForce 만 채워넣고(1-4=39N·m,
+# 5-7=9N·m — Kinova Gen3 실제 관절 정격 토크와 일치, 손대지 않는다) stiffness/
+# damping 은 0으로 남겨뒀다. 힘 = stiffness×오차 + damping×속도오차 인데 stiffness
+# 가 0이면 목표 위치를 줘도 중력을 버틸 힘이 전혀 안 나온다 — Play 시 팔 전체가
+# 흐물흐물 무너지는 원인. Franka 에셋은 Isaac 이 미리 큐레이션해서 이 값이
+# 채워져 있었는데, 이번엔 생짜 URDF 임포트라 없다.
+# 아래 값은 "오차가 조금만 나도 maxForce 에 바로 포화" 시키는 전략으로 고른
+# 시작값일 뿐 — 실측 중력 처짐/떨림으로 반드시 재검증할 것. UsdPhysics
+# RevoluteJoint 의 각도 단위는 라디안이 아니라 도(度)라는 점도 그리퍼와 동일.
+ARM_JOINT_NAMES = tuple(f"joint_{i}" for i in range(1, 8))
+ARM_DRIVE_STIFFNESS = 50.0  # 미검증 시작값 — 실측 필요
+ARM_DRIVE_DAMPING   = 50.0  # 미검증 시작값 — 실측 필요
+# kortex_gen3_7dof_robotiq_2f_85_moveit_config 의 gen3.srdf "Home" group_state
+# (라디안: [0, 0.26, 3.14, -2.27, 0, 0.96, 1.57]) 를 그대로 도(度)로 옮긴 값.
+# config/robot_defaults.yaml 의 home_joint_values 와 반드시 같은 값을 가리켜야
+# 한다 — 저 파일이 ROS 쪽(BT MoveToHome 등) 소스, 이 상수가 Isaac 쪽(물리
+# 드라이브 목표) 소스로 둘이 분리돼 있다. Panda 때는 이 타겟이 Isaac 큐레이션
+# 에셋 자체에 미리 박혀 있어서 setup_initial_scene.py 가 손댈 필요가 없었는데,
+# 생짜 URDF 임포트는 아무 목표도 없어 Play 해도 처음 자세 그대로 가만히 있다.
+# 카메라가 실제로 테이블을 보는지는 라이브로 검증 필요 — Kinova 정격 Home 이지
+# 이 씬의 관측 자세로 검증된 값이 아니다.
+KINOVA_HOME_JOINT_DEG = {
+    "joint_1": 0.0,
+    "joint_2": 14.8968,
+    "joint_3": 179.9087,
+    "joint_4": -130.0613,
+    "joint_5": 0.0,
+    "joint_6": 55.0035,
+    "joint_7": 89.9544,
+}
+
+
+def boost_arm_drive(stage):
+    """팔 관절(joint_1..7)의 드라이브 강성/댐핑/목표자세를 채운다(기본값 0 → 중력에 처짐, 목표 없음 → 제자리 고정)."""
+    robot_root = find_robot_root(stage)
+    if robot_root is None:
+        print("[arm-drive] Kinova root not found — skipped")
+        return
+
+    touched = []
+    for prim in Usd.PrimRange(robot_root):
+        name = prim.GetName()
+        if name not in ARM_JOINT_NAMES:
+            continue
+        max_force_attr = prim.GetAttribute("drive:angular:physics:maxForce")
+        if not max_force_attr:
+            print(f"[arm-drive] {name}: angular drive 없음 — 건너뜀")
+            continue
+        stiff_attr = prim.GetAttribute("drive:angular:physics:stiffness")
+        if not stiff_attr:
+            stiff_attr = UsdPhysics.DriveAPI.Apply(prim, "angular").CreateStiffnessAttr()
+        damp_attr = prim.GetAttribute("drive:angular:physics:damping")
+        if not damp_attr:
+            damp_attr = UsdPhysics.DriveAPI.Apply(prim, "angular").CreateDampingAttr()
+        target_attr = prim.GetAttribute("drive:angular:physics:targetPosition")
+        if not target_attr:
+            target_attr = UsdPhysics.DriveAPI.Apply(prim, "angular").CreateTargetPositionAttr()
+        before = (stiff_attr.Get(), damp_attr.Get(), max_force_attr.Get(), target_attr.Get())
+        target_deg = KINOVA_HOME_JOINT_DEG[name]
+        stiff_attr.Set(ARM_DRIVE_STIFFNESS)
+        damp_attr.Set(ARM_DRIVE_DAMPING)
+        target_attr.Set(target_deg)
+        touched.append(f"{name} {before} → ({ARM_DRIVE_STIFFNESS}, {ARM_DRIVE_DAMPING}, {max_force_attr.Get()}, target={target_deg})")
+
+    if touched:
+        print("[arm-drive] " + " | ".join(touched))
+    else:
+        print("[arm-drive] 팔 조인트를 찾지 못함 — 변경 없음")
 
 
 # PhysX gives a contact ZERO torsional friction by default
@@ -1069,19 +1409,19 @@ def _apply_torsional_patch(target_prim):
 
 
 def apply_gripper_friction(stage):
-    """Apply the high-friction PhysX material to both Panda fingers."""
-    franka_root = find_franka_root(stage)
-    if franka_root is None:
-        print("[gripper-friction] Franka root not found — skipped")
+    """Apply the high-friction PhysX material to both Robotiq fingertip pads."""
+    robot_root = find_robot_root(stage)
+    if robot_root is None:
+        print("[gripper-friction] Kinova root not found — skipped")
         return
 
     material_prim = _ensure_gripper_friction_material(stage)
     applied = []
     patched = 0
     for finger_name in FINGER_NAME_CANDIDATES:
-        finger_prim = find_descendant_by_candidates(franka_root, [finger_name])
+        finger_prim = find_descendant_by_candidates(robot_root, [finger_name])
         if finger_prim is None:
-            print(f"[gripper-friction] {finger_name} not found under Franka")
+            print(f"[gripper-friction] {finger_name} not found under Kinova")
             continue
         patched += _apply_torsional_patch(finger_prim)
         if _bind_physics_material(finger_prim, material_prim):
@@ -1099,12 +1439,19 @@ def apply_gripper_friction(stage):
 
 
 def find_descendant_by_candidates(root_prim, candidates):
+    """candidates 를 우선순위 순서로 하나씩 찾는다 — 후보 전체를 한 번의 순회에서
+    집합으로 묶어 검사하면, 서로 조상-자손 관계인 이름들이 섞였을 때(Gen3는
+    bracelet_link ⊃ end_effector_link ⊃ robotiq_85_base_link 로 깊이 중첩)
+    리스트 순서와 무관하게 DFS 가 먼저 만나는 "가장 얕은" 조상이 이겨버린다
+    (실측: robotiq_85_base_link 를 1순위로 넣어도 bracelet_link 에 마운트됨).
+    후보마다 별도로 전체를 순회해서 순서를 제대로 지킨다."""
     if root_prim is None:
         return None
-    candidate_names = {name.lower() for name in candidates}
-    for prim in Usd.PrimRange(root_prim):
-        if prim.GetName().lower() in candidate_names:
-            return prim
+    for name in candidates:
+        target = name.lower()
+        for prim in Usd.PrimRange(root_prim):
+            if prim.GetName().lower() == target:
+                return prim
     return None
 
 
@@ -1118,17 +1465,19 @@ def create_camera(stage, path, translate, rotate_xyz_deg=None, focal_length_mm=1
     return camera.GetPrim()
 
 
-def get_ee_mount_prim(franka_root):
-    return find_descendant_by_candidates(franka_root, WRIST_MOUNT_CANDIDATES) or find_descendant_by_candidates(
-        franka_root, EE_MOUNT_FALLBACK_CANDIDATES
+def get_ee_mount_prim(robot_root):
+    return find_descendant_by_candidates(robot_root, WRIST_MOUNT_CANDIDATES) or find_descendant_by_candidates(
+        robot_root, EE_MOUNT_FALLBACK_CANDIDATES
     )
 
 
 def deactivate_legacy_ee_cameras(stage):
     legacy_paths = [
-        "/Franka/panda_link6/camera_mount/Realsense/RSD455",
-        "/Franka/panda_link6/realsense_d435",
-        "/Franka/panda_hand/realsense_d435",
+        # Gen3 URDF-import 에 딸려온 실물 내장 손목 카메라(우리는 안 씀 — 우리
+        # 자체 EEViewCameraMount 를 robotiq_85_base_link 밑에 새로 짓는다).
+        f"{KINOVA_ROBOTIQ_BASE_LINK_PATH.rsplit('/', 1)[0]}/camera_link",
+        f"{KINOVA_ROBOTIQ_BASE_LINK_PATH.rsplit('/', 1)[0]}/camera_depth_frame",
+        f"{KINOVA_ROBOTIQ_BASE_LINK_PATH.rsplit('/', 1)[0]}/camera_color_frame",
         "/World/CapstoneAdditions/EEViewCamera",
     ]
     for path in legacy_paths:
@@ -1139,12 +1488,12 @@ def deactivate_legacy_ee_cameras(stage):
 
 def create_ee_camera(stage):
     deactivate_legacy_ee_cameras(stage)
-    franka_root = find_franka_root(stage)
-    pose_source = get_ee_mount_prim(franka_root) if franka_root else None
+    robot_root = find_robot_root(stage)
+    pose_source = get_ee_mount_prim(robot_root) if robot_root else None
     if pose_source is None:
-        pose_source = stage.GetPrimAtPath("/Franka/panda_link7")
+        pose_source = stage.GetPrimAtPath(KINOVA_ROBOTIQ_BASE_LINK_PATH)
     if pose_source is None or not pose_source.IsValid():
-        pose_source = stage.GetPrimAtPath("/Franka/panda_link6")
+        pose_source = stage.GetPrimAtPath(KINOVA_ROBOTIQ_BASE_LINK_PATH.rsplit("/", 1)[0])
 
     parent_path = str(pose_source.GetPath())
     mount_path = f"{parent_path}/EEViewCameraMount"
@@ -1353,7 +1702,7 @@ class TabletopDepthOverlay:
 
 
 def apply_scene():
-    global TOP_VIEW_ROS_BRIDGE, EE_VIEW_ROS_BRIDGE, FRANKA_JOINT_ROS_BRIDGE
+    global TOP_VIEW_ROS_BRIDGE, EE_VIEW_ROS_BRIDGE, KINOVA_JOINT_ROS_BRIDGE
     stage = omni.usd.get_context().get_stage()
     additions_root = define_xform(stage, "/World/CapstoneAdditions")
     bed_prim = stage.GetPrimAtPath(f"{additions_root.GetPath()}/HospitalBed")
@@ -1366,7 +1715,9 @@ def apply_scene():
     build_tabletop_items(stage, f"{additions_root.GetPath()}/TabletopItems")
     fix_table_collision(stage)
     apply_gripper_friction(stage)
+    fix_gripper_mimic_limits(stage)
     boost_gripper_drive(stage)
+    boost_arm_drive(stage)
     # === Mode toggle ===
     # Capture mode  : `build_capture_humans` ON, `build_hazards` OFF
     # Hazard mode   : `build_capture_humans` OFF, `build_hazards` ON (default flight scenario)
@@ -1386,9 +1737,11 @@ def apply_scene():
     bind_custom_viewports(str(ee_camera.GetPath()), str(top_camera.GetPath()))
     EE_VIEW_ROS_BRIDGE = build_ee_view_bridge(str(ee_camera.GetPath()))
     TOP_VIEW_ROS_BRIDGE = build_top_view_bridge(str(top_camera.GetPath()))
-    FRANKA_JOINT_ROS_BRIDGE = create_ros2_joint_graph(
-        articulation_path="/Franka",
-        graph_path="/World/ROS/FrankaJointGraph",
+    KINOVA_JOINT_ROS_BRIDGE = create_ros2_joint_graph(
+        # PhysicsArticulationRootAPI 는 /Kinova 자체가 아니라 URDF 임포트 계층
+        # 구조상 base_link 에 붙는다(Franka 때는 /Franka 루트에 바로 있었음).
+        articulation_path=KINOVA_ARTICULATION_ROOT_PATH,
+        graph_path="/World/ROS/KinovaJointGraph",
         # Isaac publishes raw (sim-time) joint states here; joint_state_restamp_node
         # re-stamps them to wall time and republishes on /joint_states, which the
         # MoveIt stack (incl. moveit_cpp's hard-coded 'joint_states') consumes.
