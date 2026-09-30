@@ -27,7 +27,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
     __package__ = "qwen_a100"
 
-from .qwen_call import ground  # noqa: E402
+from .qwen_call import DEFAULT_MODEL, default_endpoint, ground  # noqa: E402
 from .qwen_schema import to_json  # noqa: E402
 
 
@@ -36,9 +36,10 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--image", required=True, help="path to an EE camera frame")
     ap.add_argument("--instruction", required=True, help="natural-language command")
-    ap.add_argument("--endpoint", default="http://localhost:8000/v1")
-    ap.add_argument("--model", default="qwen35-local",
-                    help="served model id on the vLLM endpoint (Qwen3.5-27B)")
+    ap.add_argument("--endpoint", default=default_endpoint(),
+                    help="default: $NOVA_GATEWAY_URL/qwen/v1; key from $NOVA_API_KEY")
+    ap.add_argument("--model", default=DEFAULT_MODEL,
+                    help="served model id on the gateway (Qwen3.5-27B)")
     ap.add_argument("--bbox-convention", default="normalized_1000",
                     choices=["absolute", "normalized_1000", "normalized_1"],
                     help="normalized_1000 verified against qwen35-local")
@@ -65,7 +66,9 @@ def main() -> int:
         print(f"\nFAILED: {exc}", file=sys.stderr)
         print("\nIf this is a connection error, the tunnel is probably down:",
               file=sys.stderr)
-        print("  ss -tln | grep 8000", file=sys.stderr)
+        print("  source launch_env_seraph.sh   # opens it and prints /health",
+              file=sys.stderr)
+        print("HTTP 401 means NOVA_API_KEY is missing or wrong.", file=sys.stderr)
         return 1
 
     print("=" * 62)

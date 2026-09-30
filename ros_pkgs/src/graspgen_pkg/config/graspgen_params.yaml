@@ -1,6 +1,12 @@
 graspgen_node:
   ros__parameters:
-    # ── ZMQ server connection ─────────────────────────────────────────────────
+    # ── NOVA gateway (current server) ─────────────────────────────────────────
+    # gateway_url / gateway_timeout_s / depth_restore_route are deliberately
+    # NOT set here. gateway_url defaults to $NOVA_GATEWAY_URL (exported by
+    # launch_env_seraph.sh) via graspgen.launch.py, and a value in this
+    # node-name-keyed block would outrank that. The API key is $NOVA_API_KEY.
+    #
+    # ── DEPRECATED: A100 ZMQ server connection (used only if gateway_url is empty)
     # SSH tunnel 후 접속할 주소. 서버가 바뀌어도 이 두 값만 수정하면 됨.
     # e.g. aurora-g5: ssh -N -L 5556:aurora-g5:5556 <user>@aurora.khu.ac.kr
     zmq_host: '127.0.0.1'

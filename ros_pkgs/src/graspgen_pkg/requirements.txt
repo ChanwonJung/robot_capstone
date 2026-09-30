@@ -1,0 +1,35 @@
+# Python deps for graspgen_pkg (graspgen_node + its GraspGen / SwinDRNet clients).
+#
+# Install into gsam_venv, the interpreter launch_env.bash puts on PYTHONPATH,
+# together with the slow_brain clients:
+#     gsam_venv/bin/pip install -r ros_pkgs/src/slow_brain/requirements.txt \
+#                               -r ros_pkgs/src/graspgen_pkg/requirements.txt
+#
+# Not in package.xml for the same reason as slow_brain/requirements.txt: rosdep
+# has no key for msgpack-numpy, and rosdep would install into the system
+# interpreter rather than gsam_venv.
+#
+# rclpy / sensor_msgs / visualization_msgs / tf2_ros come from apt — not here.
+
+# HTTP transport to the NOVA gateway (gateway_client.py) — the CURRENT server.
+# opencv encodes/decodes the PNGs the depth routes speak (16-bit mm depth).
+requests
+opencv-python-headless
+
+# ZMQ + msgpack transport to the GraspGen (:5556) and SwinDRNet (:5557) servers
+# on the DEPRECATED A100. Still required: zmq_client / swindrnet_client import it.
+# msgpack-numpy is not optional: zmq_client.py imports it and calls .patch(), so
+# without it graspgen_node refuses to start ("Missing deps").
+pyzmq
+msgpack
+msgpack-numpy
+
+# Grasp pose maths (graspgen_node, grasp_filter) and extrinsics YAML.
+scipy
+pyyaml
+
+# <2 because gsam_venv sits IN FRONT of the apt Python packages on PYTHONPATH.
+# Ubuntu 24.04's cv_bridge and python3-scipy are built against NumPy 1.x; a
+# NumPy 2 in the venv makes them fail at import with "_ARRAY_API not found".
+# msgpack-numpy alone is enough to drag NumPy 2 in if this is left unpinned.
+numpy<2

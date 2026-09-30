@@ -11,14 +11,16 @@ Language-directed robotic manipulator that interprets ambiguous natural language
 
 ## Architecture: Slow Brain / Fast Brain
 
-**Slow Brain** runs once per command. The user types a natural-language instruction; a grounding model (GSAM) generates labeled bounding boxes + segmentation masks from both cameras; a VLM (Qwen) selects the target and destination from the annotated detections; a projection node fuses both depth streams into a labeled 3D point cloud; a grasp generator (GraspGen, on the remote A100) infers 6-DOF grasp candidates from the target point cloud.
+**Slow Brain** runs once per command. The user types a natural-language instruction; a grounding model (GSAM) generates labeled bounding boxes + segmentation masks from both cameras; a VLM (Qwen) selects the target and destination from the annotated detections; a projection node fuses both depth streams into a labeled 3D point cloud; a grasp generator (GraspGen, on the remote KHU cluster) infers 6-DOF grasp candidates from the target point cloud.
 
 **Fast Brain** runs at >30 FPS. A YOLO-based detector (`yolo_hazard_pkg`) monitors both cameras for hazards simultaneously. Detected hazards are injected as dynamic collision objects into the MoveIt planning scene, which uses hybrid planning for long-range trajectory + low-latency local reactions.
 
 **Behavior Tree** (`bt_pkg`) closes the loop: it waits for Slow Brain results, selects grasp candidates, drives MoveIt2 for pick-and-place, and suspends the arm on E-stop hazard signals.
 
 ## Hardware
-Two machines over plain SSH — no VPN or overlay network. One local workstation (RTX 5070, 12 GB) runs Isaac Sim, ROS 2, MoveIt, the YOLO tracking loop, the behavior tree, and RViz. A remote **A100** (`tta@123.37.28.208`) serves all heavy inference: Qwen vLLM on :8000, GraspGen on :5556, SwinDRNet on :5557, all loopback-only and reached through the tunnels `launch_env.bash` opens. The local GPU is capped at 12 GB, so anything larger offloads. All three remote services share one A100, so they contend under load.
+One local workstation (RTX 5070, 12 GB) runs Isaac Sim, ROS 2, MoveIt, the YOLO tracking loop, the behavior tree, and RViz. The local GPU is capped at 12 GB, so anything larger offloads to the **KHU cluster**: the `nova-server` stack (Slurm job `NOVA_depth3`, 4 GPUs on `aurora-g6`) serves Qwen3.5-27B, SAM 2.1, SwinDRNet / ReMake / tdr CA-Dual depth restoration, and GraspGen behind one HTTP gateway, reached through the single tunnel `launch_env_seraph.sh` opens. Campus network or VPN required.
+
+The **A100** (`tta@123.37.28.208`, reached by `launch_env.bash`) is **deprecated — no longer in use**. Its ZMQ clients and ports (5556/5557/5558) survive only as an opt-in fallback — pass `gateway_url:=` (empty) to use them.
 
 ## Key Constraints
 - Avoidance loop must sustain >30 FPS
@@ -33,17 +35,25 @@ Two machines over plain SSH — no VPN or overlay network. One local workstation
 
 ### Initial setup (once)
 ```bash
-# 1. Create and populate the venv
+# 1. Create and populate the venv. The NAME is legacy: it once held the local
+#    Grounded-SAM stack (torch, GroundingDINO). That stack is deprecated, but
+#    both env scripts still inject this exact directory into PYTHONPATH and
+#    abort if it is missing — so keep the name. What it holds now is just the
+#    remote-inference clients (openai + pydantic for Qwen; ZMQ/msgpack for SAM,
+#    GraspGen, SwinDRNet). numpy is pinned <2 — see graspgen_pkg/requirements.txt.
 python3 -m venv gsam_venv
-source gsam_venv/bin/activate
-pip install -r ros_pkgs/src/grounded_sam_pkg/requirements.txt
+gsam_venv/bin/pip install -r ros_pkgs/src/slow_brain/requirements.txt \
+                          -r ros_pkgs/src/graspgen_pkg/requirements.txt
 
-# 2. Download GSAM model weights
-mkdir -p models/g-sam
-wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth \
-     -O models/g-sam/groundingdino_swint_ogc.pth
-wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
-     -O models/g-sam/sam_vit_b_01ec64.pth
+# 2. DEPRECATED — local Grounded-SAM, only for the legacy grounded_sam_pkg
+#    launches (grounded_sam_dual, full_pipeline_graspgen). The active Slow Brain
+#    (qwen_a100 + sam_a100) does not need it. Heavy: torch, GroundingDINO, SAM.
+# gsam_venv/bin/pip install -r ros_pkgs/src/grounded_sam_pkg/requirements.txt
+# mkdir -p models/g-sam
+# wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth \
+#      -O models/g-sam/groundingdino_swint_ogc.pth
+# wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
+#      -O models/g-sam/sam_vit_b_01ec64.pth
 
 # 3. System deps. libzmq3-dev/libsqlite3-dev/libtinyxml2-dev are for
 #    BehaviorTree.CPP (the library source is already vendored in-tree at
@@ -66,25 +76,48 @@ committed as ordinary files. Any instruction to run `git submodule update
 ### Per-session environment
 ```bash
 # Always run this from the repo root before any ROS 2 commands
-source launch_env.bash
+source launch_env_seraph.sh
 ```
-`launch_env.bash` sources `/opt/ros/jazzy/setup.bash`, the workspace install overlay at `ros_pkgs/install/setup.bash`, injects `gsam_venv/lib/python3.12/site-packages` into `PYTHONPATH`, and exports `ROBOT_CAPSTONE_ROOT` (repo root) for use by all launch files loading `config/robot_defaults.yaml`.
+It sources `/opt/ros/jazzy/setup.bash`, the workspace install overlay at `ros_pkgs/install/setup.bash`, injects `gsam_venv/lib/python3.12/site-packages` into `PYTHONPATH`, and exports `ROBOT_CAPSTONE_ROOT` (repo root) for use by all launch files loading `config/robot_defaults.yaml`.
 
-**SSH tunnel side effect**: `launch_env.bash` opens **four** tunnels, skipping any whose port is already bound. All terminate on the A100 (`tta@123.37.28.208`), loopback-only on the server:
+**SSH tunnel side effect**: the models run as the `nova-server` stack (repo
+`HJ1-1101/nova-server`, branch `all-in-one-depth`, Slurm job `NOVA_depth3` on
+`aurora-g6`). Every model binds loopback on the compute node, so the script
+opens **one** tunnel to the HTTP gateway through `aurora-master`
+(`jaewonheo1101@163.180.160.105:30080`, campus network or VPN only) and exports
+`NOVA_GATEWAY_URL=http://127.0.0.1:9000`. Every request needs
+`x-api-key: $NOVA_API_KEY` — export it or put `NOVA_API_KEY=...` in the
+gitignored `.env`; never commit it. The script then reads `/health` and prints
+per-backend status, since that route returns 200 even with a backend down. The
+node changes between jobs: `NOVA_NODE=aurora-gN`.
 
-| Port | Serves |
-|---|---|
-| 8000 | Qwen3.5-27B via vLLM, served as `qwen35-local` (OpenAI-compatible API) |
-| 5556 | GraspGen inference (ZMQ) |
-| 5557 | SwinDRNet depth restoration (ZMQ) |
-| 5558 | SAM 2.1 segmentation (ZMQ) |
-
-Qwen previously lived on `aurora-g6` behind the `aurora.khu.ac.kr:30080` jump host; that block is retained commented-out in `launch_env.bash` in case it moves back.
-
-Suppress the tunnels when off-network or they will hang on connect:
+Suppress the tunnel when off-network or it will hang on connect:
 ```bash
-source launch_env.bash --no-tunnel   # or: SKIP_A100_TUNNEL=1 source launch_env.bash
+source launch_env_seraph.sh --no-tunnel   # or: SKIP_A100_TUNNEL=1 (legacy name)
 ```
+
+**Deprecated — `launch_env.bash` (A100).** The A100 (`tta@123.37.28.208`) is
+no longer in use. The script is kept for reference and prints a deprecation
+warning when sourced. It opened four per-model tunnels — 8000 Qwen (vLLM,
+`qwen35-local`), 5556 GraspGen (ZMQ), 5557 SwinDRNet (ZMQ), 5558 SAM 2.1 (ZMQ) —
+and those ZMQ ports remain the fallback defaults behind `gateway_url:=` (empty).
+
+**How the ROS clients reach the gateway.** Every remote-model node takes a
+`gateway_url` (Qwen: `vllm_endpoint_url` = `…/qwen/v1`) whose launch default is
+`$NOVA_GATEWAY_URL`, falling back to `http://127.0.0.1:9000`. The API key is read
+from `$NOVA_API_KEY` by the client and is **never** a ROS parameter (parameters
+are world-readable via `ros2 param get`).
+
+| Node | Client | Gateway route |
+|---|---|---|
+| `qwen_bridge_node` | `qwen_call.py` (openai + `x-api-key` default header) | `/qwen/v1/chat/completions`, model `qwen3.5-27b` |
+| `sam_mask_node` | `sam_http_client.py` | `/sam2/segment` — **one box per request** |
+| `graspgen_node` | `gateway_client.GraspGenHttpClient` | `/graspgen/infer` (JSON) |
+| `graspgen_node` | `gateway_client.DepthRestoreHttpClient` | `/<depth_restore_route>/restore_depth`, default **`compare`** (tdr CA-Dual) |
+
+Qwen3.5 on the gateway is a reasoning model: thinking tokens count against
+`max_tokens` (2048), and running out returns `content: null`, which
+`qwen_call` raises on. Raise `max_tokens` if that shows up in the log.
 
 ### Build ROS packages
 ```bash
@@ -96,7 +129,7 @@ Single package:
 cd ros_pkgs && colcon build --symlink-install --packages-select bt_pkg
 ```
 
-**Post-rebuild shebang fix (grounded_sam_pkg only)**: After every rebuild of `grounded_sam_pkg`, colcon resets entry-script shebangs to system Python, which lacks `torch`. Fix before launching:
+**Post-rebuild shebang fix (grounded_sam_pkg only — deprecated GSAM path; skip if you did not install torch)**: After every rebuild of `grounded_sam_pkg`, colcon resets entry-script shebangs to system Python, which lacks `torch`. Fix before launching:
 ```bash
 VENV_PY="$PWD/gsam_venv/bin/python"
 for f in $(find ros_pkgs/install/grounded_sam_pkg/lib -maxdepth 3 -type f -executable); do
@@ -126,19 +159,19 @@ python3 -m pytest ros_pkgs/src/grounded_sam_pkg/test/test_flake8.py -v
 ### Full system — teammate node (bt_pkg + moveit bridge)
 ```bash
 # Terminal 1 — MoveIt hybrid planner + gripper server
-source launch_env.bash
+source launch_env_seraph.sh
 ros2 launch moveit_isaac_bridge_pkg hybrid_planning.launch.py
 
 # Terminal 2 — YOLO hazard detection (both cameras)
-source launch_env.bash
+source launch_env_seraph.sh
 ros2 launch yolo_hazard_pkg yolo_hazard_both.launch.py
 
 # Terminal 3 — Hazard → MoveIt collision object injector
-source launch_env.bash
+source launch_env_seraph.sh
 ros2 launch moveit_isaac_bridge_pkg hazard_collision_injector.launch.py
 
 # Terminal 4 — Behavior tree (waits 5 s for action servers to be ready)
-source launch_env.bash
+source launch_env_seraph.sh
 ros2 launch bt_pkg bt_system.launch.py
 ```
 
@@ -172,33 +205,38 @@ tuning is a three-way coupling — `local_planner.yaml` frequency, the negative
 ### Full Slow Brain pipeline (Isaac Sim)
 ```bash
 # Terminal 1 — GSAM (dual-view: EE + Top cameras)
-source launch_env.bash
+source launch_env_seraph.sh
 ros2 launch grounded_sam_pkg grounded_sam_dual.launch.py
 
-# Terminal 2a — Real Qwen VLM (requires SSH tunnel or cluster access)
-source launch_env.bash
+# Terminal 2a — Real Qwen VLM (legacy qwen_pkg, GSAM path). qwen_pkg does NOT
+# send x-api-key, so it cannot use the NOVA gateway. For the current Slow Brain
+# use `ros2 launch qwen_a100 slow_brain.launch.py` (Qwen + SAM 2.1 + projector,
+# all through the gateway) instead of Terminals 1–3.
+source launch_env_seraph.sh
 ros2 launch qwen_pkg inst_input_qwen.launch.py \
   vllm_endpoint_url:=http://localhost:8000/v1 \
   model_name:=qwen35-local
 # Opens an xterm for typing user instructions — ros2 launch doesn't forward stdin
 
 # Terminal 2b — OR: Qwen stub (hardcoded LABEL_TO_CATEGORY, no VLM call needed)
-source launch_env.bash
+source launch_env_seraph.sh
 ros2 run grounded_sam_pkg qwen_stub_node
 
 # Terminal 3 — Multi-view projection → /world_map + /world_map_result
-source launch_env.bash
+source launch_env_seraph.sh
 ros2 launch mask_projection_pkg multi_view_projector.launch.py \
   ee_depth_topic:=/ee_rgbd_camera/depth_image \
   ee_camera_info_topic:=/ee_rgbd_camera/camera_info \
   top_depth_topic:=/rgbd_camera/depth_image \
   top_camera_info_topic:=/rgbd_camera/camera_info
 
-# Terminal 4 — GraspGen (remote A100 via the 5556 tunnel) → /grasp_candidates
-source launch_env.bash
+# Terminal 4 — GraspGen via the NOVA gateway ($NOVA_GATEWAY_URL) → /grasp_candidates
+source launch_env_seraph.sh
 ros2 launch graspgen_pkg graspgen.launch.py
 
-# Terminal 4, transparent objects (glass) — adds SwinDRNet depth restoration
+# Terminal 4, transparent objects (glass) — adds depth restoration. The switch
+# is still named swindrnet_enabled; the model is depth_restore_route (default
+# compare = tdr CA-Dual; also remake | swindrnet).
 ros2 launch graspgen_pkg graspgen.launch.py \
   swindrnet_enabled:=true transparent_reconstruct_enabled:=true transparent_force:=true
 ```
@@ -210,7 +248,12 @@ ros2 launch graspgen_pkg full_pipeline_graspgen.launch.py prompt:="cup, table, o
 Its `num_grasps`/`topk_num_grasps` defaults (50/5) are stale relative to
 `graspgen.launch.py` (200/100) — pass them explicitly if you care.
 
-### Test Qwen endpoint directly (SSH tunnel)
+### Test the remote models directly
+The gateway's own smoke test covers every model (run from a clone of nova-server):
+```bash
+python logs/test_assets/nova_check.py --base "$NOVA_GATEWAY_URL" --api-key "$NOVA_API_KEY" --compare
+```
+Deprecated — Qwen on the A100 tunnel:
 ```bash
 # Requires: ssh -L 8000:localhost:8000 user@cluster -N
 python models/qwen3.5/qwen_ssh_client.py \
@@ -227,7 +270,7 @@ ros_pkgs/src/
 ├── grounded_sam_pkg/       Slow Brain perception — GroundingDINO + SAM
 ├── qwen_pkg/               Slow Brain VLM — Qwen grounding + instruction input
 ├── mask_projection_pkg/    2D mask + depth → labeled 3D PointCloud2
-├── graspgen_pkg/           Slow Brain grasp detection — ACTIVE path, ZMQ → remote A100
+├── graspgen_pkg/           Slow Brain grasp detection — ACTIVE path, HTTP → NOVA gateway
 ├── target_pose_bridge_pkg/ /world_map_result → MoveIt goal poses (centroid-based, legacy)
 ├── moveit_isaac_bridge_pkg/MoveIt + Isaac Sim joint bridge + gripper action server
 ├── yolo_hazard_pkg/        Fast Brain hazard detection — YOLO on both cameras >30 FPS
@@ -237,12 +280,13 @@ ros_pkgs/src/
 ```
 
 See `ROS_NODES.md` for a full per-node topic/action reference, and
-`A100_GRASPGEN_QUICK_START.md` / `SWINDRNET_INTEGRATION.md` for the remote
-inference server runbooks.
+`A100_GRASPGEN_QUICK_START.md` / `SWINDRNET_INTEGRATION.md` for the **deprecated**
+A100 server runbooks. For the current server see `ACCESS.md` in
+`HJ1-1101/nova-server` (branch `all-in-one-depth`).
 
 ### Unified parameter file
 
-`config/robot_defaults.yaml` (repo root) is the single source of truth for shared robot identity parameters. All launch files load it first; package YAMLs override only what is package-specific. `$ROBOT_CAPSTONE_ROOT` (set by `launch_env.bash`) points to the repo root.
+`config/robot_defaults.yaml` (repo root) is the single source of truth for shared robot identity parameters. All launch files load it first; package YAMLs override only what is package-specific. `$ROBOT_CAPSTONE_ROOT` (set by `launch_env_seraph.sh`) points to the repo root.
 
 **Grasp pool vs BT retry budget — decoupled.** `robot_defaults.yaml` carries both:
 
@@ -278,8 +322,8 @@ C++ `declare_parameter` fallback, always overridden by the launch file.
 
 /world_map_result (trigger) ─┐
 /ee_camera/{depth,image_raw,camera_info} ─┤→ graspgen_node → /grasp_candidates (JSON, latched)
-/sam/mask_image, /qwen/labeled_detections ┘   │  [ZMQ → A100 :5556]  → /grasp_markers (RViz)
-                                              └─ optional [ZMQ → A100 :5557 SwinDRNet]
+/sam/mask_image, /qwen/labeled_detections ┘   │  [HTTP → gateway /graspgen/infer]  → /grasp_markers (RViz)
+                                              └─ optional [HTTP → gateway /compare/restore_depth]
                                                  → /graspgen/target_cloud (debug)
 
 /world_map_result  ─┐
@@ -296,7 +340,7 @@ MoveIt  →  hybrid_command_bridge_node  →  /joint_command  →  Isaac Sim
 
 | Node | Status | Notes |
 |---|---|---|
-| `graspgen_node` | **Use this one.** | 6-DOF candidates from the remote A100 over ZMQ. |
+| `graspgen_node` | **Use this one.** | 6-DOF candidates from remote GraspGen via the NOVA gateway. |
 | `target_pose_bridge_node` | Legacy | Simple centroid-offset pose for `capstone_pick_pipeline.launch.py`. |
 
 Both grasp publishers use **latched QoS** (`transient_local`, depth 1) on `/grasp_candidates`, as does `/world_map_result` — `bt_executor_node` therefore picks up the last scan even if it starts late.
@@ -548,13 +592,14 @@ reports "NO TESTS RAN").
 ### graspgen_pkg internals
 
 The active grasp path. All heavy inference is remote; the node only extracts the
-target cloud, ships it over ZMQ, and filters what comes back.
+target cloud, ships it to the NOVA gateway over HTTP, and filters what comes back.
 
 | Module | Role |
 |---|---|
 | `graspgen_node.py` | The only ROS node. Caches EE depth/RGB/CameraInfo + GSAM mask, triggers on `/world_map_result`, extracts the TARGET cloud, calls GraspGen, filters and re-poses the grasps |
-| `zmq_client.py` | `GraspGenClient` — ZMQ REQ/REP + msgpack, with REQ-socket reset-on-timeout recovery |
-| `swindrnet_client.py` | `SwinDRNetClient` — sends (RGB, broken depth, K), gets restored depth back |
+| `gateway_client.py` | **Current transport.** `GraspGenHttpClient` (`/graspgen/infer`) and `DepthRestoreHttpClient` (`/<route>/restore_depth`: full-frame RGB + 16-bit mm depth + TARGET mask), `x-api-key` from `$NOVA_API_KEY` |
+| `zmq_client.py` | *Deprecated A100 fallback.* `GraspGenClient` — ZMQ REQ/REP + msgpack, reset-on-timeout recovery |
+| `swindrnet_client.py` | *Deprecated A100 fallback.* `SwinDRNetClient` — sends a 252 px cup crop (RGB, hole-punched depth, K, `use_pp`) |
 | `grasp_filter.py` | `top_down_filter` (approach angle), `confidence_top_n`, and `IKFeasibilityChecker` (MoveIt `/compute_ik`, **fail-open**) |
 | `cloud_extractor.py` | TARGET detection → mask value; masked depth → world-frame `(N,3)` cloud |
 | `depth_utils.py` | ROS-free depth/mask decode, `extract_K`, extrinsics YAML load |
@@ -565,12 +610,21 @@ target cloud, ships it over ZMQ, and filters what comes back.
 **`MultiThreadedExecutor` is required**, not optional — the IK checker polls
 futures on a `ReentrantCallbackGroup` and will deadlock on a single-threaded spin.
 
-**SwinDRNet is opt-in and fails loudly.** It only runs when
-`transparent_reconstruct_enabled` **and** the TARGET label is in
+**Depth restoration is opt-in and fails loudly.** It only runs when
+`swindrnet_enabled` (the name predates the gateway) and
+`transparent_reconstruct_enabled` are set **and** the TARGET label is in
 `transparent_labels` (or `transparent_force`). On failure the node logs and falls
 back to **raw depth** — deliberately, so a bad restoration is visible rather than
 silently papered over by a geometric prior. `SWINDRNET_INTEGRATION.md` still
 documents an analytic-cylinder fallback stage that no longer exists.
+
+**Gateway depth models take the FULL frame, not a crop.** `compare`/`remake`
+were trained on TransCG full frames with the **raw** depth plus a
+transparent-object mask, and blend `C·pred + (1−C)·raw`. The 252 px
+cup-centred crop, hole-punched depth and shifted principal point in
+`graspgen_node` belong to the deprecated A100 `cup_ft_v3` SwinDRNet only — do
+not apply them on the gateway path. Depth crosses the wire as 16-bit
+**millimetre** PNG, 0 = no return; the node works in float metres.
 
 ### moveit_isaac_bridge_pkg additions
 

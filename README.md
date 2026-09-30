@@ -19,10 +19,10 @@ The pipeline is split so that heavy reasoning never blocks the safety loop.
 
 | Stage | Component | Role |
 |---|---|---|
-| Grounding | **Qwen3.5-27B** (remote A100) | Instruction + EE image → labeled boxes, target/destination, spatial relation |
-| Segmentation | **SAM 2.1** (remote A100) | Boxes → pixel masks for the two key objects |
+| Grounding | **Qwen3.5-27B** (remote, KHU cluster) | Instruction + EE image → labeled boxes, target/destination, spatial relation |
+| Segmentation | **SAM 2.1** (remote, KHU cluster) | Boxes → pixel masks for the two key objects |
 | Fusion | `mask_projection_pkg` | Masks + dual depth → labeled 3D point cloud + centroids |
-| Grasping | **GraspGen** (remote A100) | Target cloud → ranked 6-DOF grasp candidates |
+| Grasping | **GraspGen** (remote, KHU cluster) | Target cloud → ranked 6-DOF grasp candidates |
 
 ### Fast Brain — sustains >30 FPS
 
@@ -41,21 +41,25 @@ drives MoveIt for pick-and-place, and suspends the arm on an E-stop hazard.
 
 ## 2. Hardware
 
-Two machines: one local workstation running everything real-time, and a remote
-A100 running all heavy inference. The local GPU is capped at 12 GB, so anything
-larger offloads.
+One local workstation running everything real-time, and the KHU cluster running
+all heavy inference. The local GPU is capped at 12 GB, so anything larger
+offloads.
 
 | Node | Hardware | Role |
 |---|---|---|
 | **Local** | RTX 5070 (12 GB) | Isaac Sim, ROS 2, MoveIt, YOLO tracking, Behavior Tree, RViz |
-| **Inference** | A100 (`tta@123.37.28.208`) | Qwen3.5-27B :8000 · GraspGen :5556 · SwinDRNet :5557 · SAM 2.1 :5558 |
+| **Inference** | KHU cluster, `nova-server` job `NOVA_depth3` (4 GPUs, `aurora-g6`) | Qwen3.5-27B · SAM 2.1 · SwinDRNet / ReMake / tdr CA-Dual · GraspGen, all behind one HTTP gateway on :9000 |
 
-All four A100 services are **loopback-only** on the server and reached over
-plain SSH tunnels that `launch_env.bash` opens automatically. No VPN or overlay
-network is involved — if `ssh tta@123.37.28.208` works, the tunnels work.
+Every model is **loopback-only** on the compute node. `launch_env_seraph.sh`
+opens a single SSH tunnel to the gateway through `aurora-master`
+(`jaewonheo1101@163.180.160.105`, port 30080) — campus network or VPN only —
+and every request needs an `x-api-key`. See `ACCESS.md` in
+`HJ1-1101/nova-server` (branch `all-in-one-depth`).
 
-Because they all share one GPU, a slow Qwen call and a grasp request contend
-with each other. Worth watching if latency spikes during a full run.
+> **Deprecated:** the A100 (`tta@123.37.28.208`, `launch_env.bash`, ports
+> 8000/5556/5557/5558) is no longer in use. Those ports are still the
+> ZMQ fallback defaults, used only when a launch is given `gateway_url:=` (empty).
+> Every client talks to the gateway by default; the key comes from `$NOVA_API_KEY`.
 
 ---
 
@@ -68,14 +72,16 @@ Two venvs at the repo root. They are separate because `ultralytics` pulls its ow
 
 | venv | Used by | Notes |
 |---|---|---|
-| `gsam_venv` | everything except YOLO | `launch_env.bash` injects it into `PYTHONPATH` and **aborts if it is missing** |
+| `gsam_venv` | everything except YOLO | Legacy name — it no longer needs Grounded-SAM, but `launch_env_seraph.sh` injects this exact directory into `PYTHONPATH` and **aborts if it is missing** |
 | `.venv-yolo` | `yolo_hazard_pkg` | Path is hardcoded in all three YOLO launch files |
 
 **Core dependencies** — required by the active pipeline (Qwen, GraspGen,
 SwinDRNet, projection). These are what remain once Grounded-SAM is retired:
 
 ```bash
-python3 -m venv gsam_venv && gsam_venv/bin/pip install openai pydantic pyzmq msgpack msgpack-numpy opencv-python-headless numpy pyyaml
+python3 -m venv gsam_venv && gsam_venv/bin/pip install \
+    -r ros_pkgs/src/slow_brain/requirements.txt \
+    -r ros_pkgs/src/graspgen_pkg/requirements.txt
 ```
 
 **YOLO**, in its own venv:
@@ -118,18 +124,21 @@ cd ros_pkgs && colcon build --symlink-install && source install/setup.bash
 ### Step 0 — environment, every terminal, always first
 
 ```bash
-source launch_env.bash
+source launch_env_seraph.sh
 ```
 
 This sources ROS 2 + the workspace overlay, injects `gsam_venv` into
-`PYTHONPATH`, exports `ROBOT_CAPSTONE_ROOT`, and opens the four A100 tunnels
-(8000 Qwen, 5556 GraspGen, 5557 SwinDRNet, 5558 SAM 2.1), skipping any already bound.
+`PYTHONPATH`, exports `ROBOT_CAPSTONE_ROOT`, opens the gateway tunnel
+(`NOVA_GATEWAY_URL=http://127.0.0.1:9000`) and prints each backend's health.
+Set `NOVA_API_KEY` first (or put it in the gitignored `.env`).
 
-Off-network, skip the tunnels so they don't hang on connect:
+Off-network, skip the tunnel so it doesn't hang on connect:
 
 ```bash
-source launch_env.bash --no-tunnel
+source launch_env_seraph.sh --no-tunnel
 ```
+
+`launch_env.bash` (A100) is **deprecated** and warns when sourced.
 
 **After every rebuild of `grounded_sam_pkg`**, colcon resets entry-script
 shebangs to system Python, which lacks `torch`. Patch them back before launching:
@@ -138,24 +147,24 @@ shebangs to system Python, which lacks `torch`. Patch them back before launching
 VENV_PY="$PWD/gsam_venv/bin/python"; for f in $(find ros_pkgs/install/grounded_sam_pkg/lib -maxdepth 3 -type f -executable); do head -1 "$f" | grep -q "^#!/usr/bin/python3$" && sed -i "1s|^#!/usr/bin/python3$|#!${VENV_PY}|" "$f"; done
 ```
 
-### Step 1 — confirm the A100 is reachable
+### Step 1 — confirm the cluster is reachable
+
+`launch_env_seraph.sh` already prints per-backend health. To re-check:
 
 ```bash
-ss -tln | grep -E ':(8000|555[678])'
-```
-```bash
-curl -s http://localhost:8000/v1/models | python3 -m json.tool
+curl -s -H "x-api-key: $NOVA_API_KEY" "$NOVA_GATEWAY_URL/health" | python3 -m json.tool
 ```
 
-A sub-second failure from any A100 client means the tunnel is down; a slow
-failure means the service is down or loaded.
+`/health` returns 200 even with a backend down — read each backend's `status`.
+Nothing answering at all usually means the Slurm job is not running or landed on
+another node: `squeue -u jaewonheo1101` on `aurora-master`, then `NOVA_NODE=aurora-gN`.
 
-If a service is down, see `A100_GRASPGEN_QUICK_START.md` and
-`SWINDRNET_INTEGRATION.md` for start/restart procedures.
+`A100_GRASPGEN_QUICK_START.md` and `SWINDRNET_INTEGRATION.md` are the
+**deprecated** A100 runbooks.
 
 ### Step 2 — launch order
 
-Each command in its own terminal, `source launch_env.bash` first in all of them.
+Each command in its own terminal, `source launch_env_seraph.sh` first in all of them.
 
 Order matters only for **T1** (Isaac must be up so the camera and joint topics
 exist). Everything after that is event-driven: each stage triggers on the
@@ -171,10 +180,12 @@ Slow Brain topics are latched, so a late subscriber still receives the last scan
 | **T5** | Grounded-SAM (dual view) | `ros2 launch grounded_sam_pkg grounded_sam_dual.launch.py prompt:="book, box"` |
 | **T6** | Qwen labeling | `ros2 run grounded_sam_pkg qwen_stub_node` |
 | **T7** | Mask projection | `ros2 launch mask_projection_pkg multi_view_projector.launch.py ee_depth_topic:=/ee_rgbd_camera/depth_image ee_camera_info_topic:=/ee_rgbd_camera/camera_info top_depth_topic:=/rgbd_camera/depth_image top_camera_info_topic:=/rgbd_camera/camera_info` |
-| **T8** | GraspGen (A100) | `ros2 launch graspgen_pkg graspgen.launch.py mask_topic:=/qwen/mask_image` |
+| **T8** | GraspGen (remote) | `ros2 launch graspgen_pkg graspgen.launch.py mask_topic:=/qwen/mask_image` |
 | **T9** | Behavior Tree | `ros2 launch bt_pkg bt_system.launch.py` |
 
-For transparent objects (glass), add SwinDRNet depth restoration to T8:
+For transparent objects (glass), add depth restoration to T8 (gateway model
+`depth_restore_route`, default `compare` — our tdr CA-Dual; the switch keeps its
+old name `swindrnet_enabled`):
 
 ```bash
 ros2 launch graspgen_pkg graspgen.launch.py mask_topic:=/qwen/mask_image swindrnet_enabled:=true transparent_reconstruct_enabled:=true transparent_force:=true
@@ -222,7 +233,8 @@ ros2 topic pub --once /bt/replan_request std_msgs/msg/Empty "{}"
 ```text
 robot_capstone/
 ├── config/robot_defaults.yaml   # shared robot identity params, loaded by every launch file
-├── launch_env.bash              # env + A100 SSH tunnels — source this first, always
+├── launch_env_seraph.sh         # env + KHU gateway tunnel — source this first, always
+├── launch_env.bash              # DEPRECATED — env + A100 tunnels
 ├── run_capstone_scene.sh        # Isaac Sim entrypoint
 ├── run_hazard_demo.sh           # scripted hazard scenarios
 ├── models/                      # weights: g-sam/, yolo26/, qwen3.5/
@@ -234,7 +246,7 @@ robot_capstone/
     │   ├── qwen_a100/           # instruction + image → boxes, labels, destination spec
     │   └── sam_a100/            # boxes → SAM 2.1 masks
     ├── mask_projection_pkg/     # masks + depth → labeled 3D cloud + centroids
-    ├── graspgen_pkg/            # 6-DOF grasp generation via A100 (active path)
+    ├── graspgen_pkg/            # 6-DOF grasp generation, remote GraspGen (active path)
     ├── yolo_hazard_pkg/         # Fast Brain hazard detection
     ├── moveit_isaac_bridge_pkg/ # MoveIt ↔ Isaac joint bridge, gripper action server
     ├── bt_pkg/                  # BehaviorTree.ROS2 pick-and-place executor
@@ -280,7 +292,7 @@ Fewer stages, no noun bottleneck, and a much larger model doing the grounding.
 RGB-D sensors see through glass and return the table behind it, so transparent
 objects arrive at the grasp stage as holes. SwinDRNet reconstructs plausible
 depth before the point cloud is built, giving GraspGen a solid object to work
-with. Runs on the A100 at port 5557; opt-in per object class.
+with. Ran on the (now deprecated) A100 at port 5557; the cluster serves a TransCG-tuned SwinDRNet behind the gateway. Opt-in per object class.
 
 ### 6.3 — Complete the place phase
 

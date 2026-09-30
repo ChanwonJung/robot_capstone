@@ -48,6 +48,8 @@ _LATCHED_QOS = QoSProfile(
 _LATCHED_SUB_QOS = _LATCHED_QOS
 
 from .zmq_client import GraspGenClient, check_deps
+from .gateway_client import (DepthRestoreHttpClient, GraspGenHttpClient,
+                             default_gateway_url)
 from .depth_utils import (decode_depth, decode_mask, extract_K,
                            load_ee_extrinsics, apply_world_to_robot_tf)
 from .cloud_extractor import find_target_mask_val, extract_target_cloud
@@ -67,7 +69,9 @@ class GraspGenNode(Node):
 
         ok, err = check_deps()
         if not ok:
-            self.get_logger().error(f'Missing deps: {err}\nRun: pip install pyzmq msgpack')
+            self.get_logger().error(
+                f'Missing deps: {err}\nRun: gsam_venv/bin/pip install '
+                '-r ros_pkgs/src/graspgen_pkg/requirements.txt')
             raise ImportError(err)
 
         self._declare_params()
@@ -91,6 +95,14 @@ class GraspGenNode(Node):
 
     def _declare_params(self) -> None:
         p = self.declare_parameter
+        # NOVA HTTP gateway (launch_env_seraph.sh). Non-empty = use it for both
+        # GraspGen and depth restoration; the API key comes from $NOVA_API_KEY,
+        # never from a parameter. Empty = the DEPRECATED A100 ZMQ path below.
+        p('gateway_url',              default_gateway_url())
+        p('gateway_timeout_s',        120.0)
+        # compare (tdr CA-Dual, ours) | remake | swindrnet — see gateway_client.py
+        p('depth_restore_route',      'compare')
+        # ── DEPRECATED: A100 ZMQ transport, used only when gateway_url is empty ──
         p('zmq_host',                 '127.0.0.1')
         p('zmq_port',                 5556)
         p('zmq_timeout_ms',           5000)
@@ -234,6 +246,9 @@ class GraspGenNode(Node):
         p('transparent_force',               False)
         p('transparent_labels',              ['glass', 'cup', 'bottle', 'transparent', 'wine'])
         # ──── Stage 2: SwinDRNet (학습 모델) ──────────────────────────────
+        # swindrnet_enabled is the on/off switch for depth restoration on ANY
+        # backend — the name predates the gateway. With gateway_url set, the
+        # model is depth_restore_route (default compare), not SwinDRNet.
         p('swindrnet_enabled',               False)
         p('swindrnet_host',                  '127.0.0.1')
         p('swindrnet_port',                  5557)
@@ -307,16 +322,43 @@ class GraspGenNode(Node):
 
     def _init_zmq(self) -> None:
         g = self.get_parameter
+        self._gateway_url = str(g('gateway_url').value).strip()
+        self._gateway_timeout = float(g('gateway_timeout_s').value)
+        if self._gateway_url:
+            self._client = GraspGenHttpClient(self._gateway_url,
+                                              timeout_s=self._gateway_timeout)
+            self.get_logger().info(
+                f'GraspGen gateway → {self._gateway_url}/graspgen/infer  '
+                f'timeout={self._gateway_timeout:.0f}s')
+            if not os.environ.get('NOVA_API_KEY'):
+                self.get_logger().warn(
+                    'NOVA_API_KEY is not set — every gateway request will get '
+                    'HTTP 401. Export it (or add it to .env) and re-source '
+                    'launch_env_seraph.sh before launching.')
+            return
         host, port, timeout = g('zmq_host').value, g('zmq_port').value, g('zmq_timeout_ms').value
         self._client = GraspGenClient(host, port, timeout)
-        self.get_logger().info(f'GraspGen ZMQ → tcp://{host}:{port}  timeout={timeout}ms')
+        self.get_logger().warn(
+            f'GraspGen ZMQ → tcp://{host}:{port} — DEPRECATED A100 transport '
+            '(gateway_url is empty)')
 
     def _init_swindrnet(self) -> None:
-        """Initialize SwinDRNet client (optional). Lazy connect on first use."""
-        self._swindrnet_client: Optional[SwinDRNetClient] = None
+        """Initialize the depth-restoration client (optional)."""
+        self._swindrnet_client: Optional[
+            SwinDRNetClient | DepthRestoreHttpClient] = None
         if not self._swindrnet_enabled:
             return
         g = self.get_parameter
+        if self._gateway_url:
+            route = str(g('depth_restore_route').value).strip().lower()
+            try:
+                self._swindrnet_client = DepthRestoreHttpClient(
+                    self._gateway_url, route=route, timeout_s=self._gateway_timeout)
+                self.get_logger().info(
+                    f'Depth restore gateway → {self._gateway_url}/{route}/restore_depth')
+            except ValueError as e:
+                self.get_logger().error(f'Depth restore disabled: {e}')
+            return
         host = g('swindrnet_host').value
         port = g('swindrnet_port').value
         timeout = g('swindrnet_timeout_ms').value
@@ -645,51 +687,65 @@ class GraspGenNode(Node):
                     import cv2
                     t_swin = time.monotonic()
 
-                    # ── fine-tune 전처리와 1:1 일치 (필수) ──────────────────
-                    # 모델은 컵중심 252 크롭 → 224, 컵=구멍(0), off-center pp 로
-                    # 학습됨(finetune_swindrnet.py CupDS). 풀프레임을 그대로 넣으면
-                    # 스케일/FOV 가 out-of-distribution 이 되어 fine-tune 효과가
-                    # 사라진다. 여기서 학습과 동일한 크롭 입력을 만들어 보낸다.
-                    # (대조실험: 크롭+use_pp 경로가 학습경로와 컵 L1 ~1mm 일치 확인.)
-                    CROP = 252
                     rgb_uint8 = self._ee_rgb.astype(np.uint8)
-                    Hf, Wf = self._ee_depth.shape[:2]
-
                     m_cup = (self._mask == target_val)
                     ys, xs = np.where(m_cup)
                     if len(xs) < 30:
                         raise RuntimeError(
-                            f'유리 마스크 픽셀 부족 ({len(xs)}) — 252 크롭 불가')
-                    ccx, ccy = float(xs.mean()), float(ys.mean())
-                    x0 = int(np.clip(round(ccx - CROP // 2), 0, max(0, Wf - CROP)))
-                    y0 = int(np.clip(round(ccy - CROP // 2), 0, max(0, Hf - CROP)))
+                            f'유리 마스크 픽셀 부족 ({len(xs)}) — 복원 불가')
 
-                    # 컵 영역을 구멍(0=invalid)으로 만든 뒤 크롭 (see-through
-                    # 값을 모델이 채우게). broken depth 는 미터, 정규화 금지.
-                    depth_hole = self._ee_depth.copy()
-                    depth_hole[m_cup] = 0.0
-                    depth_crop = depth_hole[y0:y0 + CROP, x0:x0 + CROP]
-                    rgb_crop = rgb_uint8[y0:y0 + CROP, x0:x0 + CROP]
+                    if isinstance(self._swindrnet_client, DepthRestoreHttpClient):
+                        # ── NOVA gateway: FULL FRAME + TARGET mask ─────────────
+                        # compare/remake 는 TransCG 풀프레임에 raw depth + 투명물체
+                        # 마스크로 학습됐고 C*예측 + (1-C)*raw 로 섞는다. 아래 A100
+                        # 경로의 252 크롭 / 구멍 뚫기 / use_pp 는 cup_ft_v3 전용이라
+                        # 여기서 쓰면 오히려 out-of-distribution 이 된다.
+                        restored_depth = self._swindrnet_client.restore(
+                            rgb_uint8, self._ee_depth, m_cup)
+                        dt_swin = time.monotonic() - t_swin
+                        self.get_logger().debug(
+                            f'[투명복원] gateway route='
+                            f'{self._swindrnet_client.route} '
+                            f'meta={self._swindrnet_client.last_meta}')
+                    else:
+                        # ── DEPRECATED A100 SwinDRNet (cup_ft_v3) ──────────────
+                        # 모델은 컵중심 252 크롭 → 224, 컵=구멍(0), off-center pp 로
+                        # 학습됨(finetune_swindrnet.py CupDS). 풀프레임을 그대로 넣으면
+                        # 스케일/FOV 가 out-of-distribution 이 되어 fine-tune 효과가
+                        # 사라진다. 여기서 학습과 동일한 크롭 입력을 만들어 보낸다.
+                        # (대조실험: 크롭+use_pp 경로가 학습경로와 컵 L1 ~1mm 일치 확인.)
+                        CROP = 252
+                        Hf, Wf = self._ee_depth.shape[:2]
+                        ccx, ccy = float(xs.mean()), float(ys.mean())
+                        x0 = int(np.clip(round(ccx - CROP // 2), 0, max(0, Wf - CROP)))
+                        y0 = int(np.clip(round(ccy - CROP // 2), 0, max(0, Hf - CROP)))
 
-                    # 크롭은 초점거리 불변, principal point 만 (x0,y0) 이동.
-                    # use_pp=True 로 서버가 이 off-center pp 를 쓰게 한다.
-                    K_crop = self._ee_K.astype(np.float64).copy()
-                    K_crop[0, 2] -= x0
-                    K_crop[1, 2] -= y0
+                        # 컵 영역을 구멍(0=invalid)으로 만든 뒤 크롭 (see-through
+                        # 값을 모델이 채우게). broken depth 는 미터, 정규화 금지.
+                        depth_hole = self._ee_depth.copy()
+                        depth_hole[m_cup] = 0.0
+                        depth_crop = depth_hole[y0:y0 + CROP, x0:x0 + CROP]
+                        rgb_crop = rgb_uint8[y0:y0 + CROP, x0:x0 + CROP]
 
-                    rest_crop = self._swindrnet_client.restore(
-                        rgb_crop, depth_crop, K_crop, use_pp=True)  # (CROP, CROP)
-                    dt_swin = time.monotonic() - t_swin
+                        # 크롭은 초점거리 불변, principal point 만 (x0,y0) 이동.
+                        # use_pp=True 로 서버가 이 off-center pp 를 쓰게 한다.
+                        K_crop = self._ee_K.astype(np.float64).copy()
+                        K_crop[0, 2] -= x0
+                        K_crop[1, 2] -= y0
 
-                    # 복원 패치를 풀프레임 depth 의 크롭 위치에 되붙임 (컵 밖은
-                    # raw depth 유지 — 배경은 원래 정상). 이후 extract_target_cloud
-                    # 은 풀프레임 K 로 그대로 back-project.
-                    restored_depth = self._ee_depth.copy()
-                    restored_depth[y0:y0 + CROP, x0:x0 + CROP] = rest_crop
-                    self.get_logger().debug(
-                        f'[투명복원] 크롭 x0={x0} y0={y0} '
-                        f'centroid=({ccx:.0f},{ccy:.0f}) pp→'
-                        f'({K_crop[0,2]:.0f},{K_crop[1,2]:.0f}) use_pp=True')
+                        rest_crop = self._swindrnet_client.restore(
+                            rgb_crop, depth_crop, K_crop, use_pp=True)  # (CROP, CROP)
+                        dt_swin = time.monotonic() - t_swin
+
+                        # 복원 패치를 풀프레임 depth 의 크롭 위치에 되붙임 (컵 밖은
+                        # raw depth 유지 — 배경은 원래 정상). 이후 extract_target_cloud
+                        # 은 풀프레임 K 로 그대로 back-project.
+                        restored_depth = self._ee_depth.copy()
+                        restored_depth[y0:y0 + CROP, x0:x0 + CROP] = rest_crop
+                        self.get_logger().debug(
+                            f'[투명복원] 크롭 x0={x0} y0={y0} '
+                            f'centroid=({ccx:.0f},{ccy:.0f}) pp→'
+                            f'({K_crop[0,2]:.0f},{K_crop[1,2]:.0f}) use_pp=True')
 
                     # 복원 품질 평가: TARGET 마스크 안에서 모델이 raw 대비
                     # 얼마나 depth 를 당겼는가 (유리 표면은 테이블보다 카메라에
@@ -698,8 +754,9 @@ class GraspGenNode(Node):
                     raw_med   = float(np.median(self._ee_depth[m_t])) if m_t.any() else float('nan')
                     rest_med  = float(np.median(restored_depth[m_t])) if m_t.any() else float('nan')
                     delta_mm  = (raw_med - rest_med) * 1000.0
+                    model = getattr(self._swindrnet_client, 'route', 'swindrnet(A100)')
                     self.get_logger().info(
-                        f'[투명복원] SwinDRNet {dt_swin*1000:.0f}ms | '
+                        f'[투명복원] {model} {dt_swin*1000:.0f}ms | '
                         f'TARGET median raw={raw_med:.4f}m → restored={rest_med:.4f}m '
                         f'(Δ={delta_mm:+.1f}mm, 양수여야 유리 표면 복원)')
 
@@ -712,10 +769,10 @@ class GraspGenNode(Node):
                     )
                     n_pts = len(pts_world) if pts_world is not None else 0
                     if n_pts == 0:
-                        self.get_logger().warn('[투명복원] SwinDRNet 복원 후 TARGET 포인트 0')
+                        self.get_logger().warn('[투명복원] 깊이 복원 후 TARGET 포인트 0')
                         pts_world = None
                 except Exception as e:
-                    self.get_logger().error(f'[투명복원] SwinDRNet 실패: {e}')
+                    self.get_logger().error(f'[투명복원] 깊이 복원 실패: {e}')
                     pts_world = None
 
             if pts_world is None:

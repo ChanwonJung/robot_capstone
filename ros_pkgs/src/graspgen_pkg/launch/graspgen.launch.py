@@ -2,10 +2,13 @@
 graspgen.launch.py — graspgen_node 단독 실행 (기존 파이프라인 끝에 붙이기용)
 
 전제: GSAM + Qwen stub + Projection 파이프라인이 이미 실행 중이어야 함.
-전제: SSH tunnel이 열려 있어야 함.
+전제: source launch_env_seraph.sh — NOVA gateway 터널 + NOVA_API_KEY.
 
 Usage:
   ros2 launch graspgen_pkg graspgen.launch.py
+  ros2 launch graspgen_pkg graspgen.launch.py depth_restore_route:=remake
+
+DEPRECATED (A100 ZMQ — gateway_url:= 로 비워야 사용):
   ros2 launch graspgen_pkg graspgen.launch.py zmq_host:=127.0.0.1 zmq_port:=5556
   ros2 launch graspgen_pkg graspgen.launch.py \
     zmq_host:=127.0.0.1 zmq_port:=5558 topk_num_grasps:=3
@@ -22,7 +25,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -38,6 +41,27 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     args = [
+        # ── NOVA gateway (current server) ─────────────────────────────────
+        DeclareLaunchArgument(
+            'gateway_url',
+            default_value=EnvironmentVariable(
+                'NOVA_GATEWAY_URL', default_value='http://127.0.0.1:9000'),
+            description='NOVA HTTP gateway (exported by launch_env_seraph.sh). '
+                        'Empty = DEPRECATED A100 ZMQ transport. API key comes from '
+                        '$NOVA_API_KEY, never a parameter.',
+        ),
+        DeclareLaunchArgument(
+            'gateway_timeout_s',
+            default_value='120.0',
+            description='Per-request timeout; the gateway itself allows GraspGen 120 s',
+        ),
+        DeclareLaunchArgument(
+            'depth_restore_route',
+            default_value='compare',
+            description='Transparent-depth model on the gateway: compare (tdr '
+                        'CA-Dual, ours) | remake | swindrnet',
+        ),
+        # ── DEPRECATED: A100 ZMQ (only when gateway_url is empty) ─────────
         DeclareLaunchArgument(
             'zmq_host',
             default_value='127.0.0.1',
@@ -210,9 +234,10 @@ def generate_launch_description() -> LaunchDescription:
             'swindrnet_enabled',
             default_value='true',
             description=(
-                'SwinDRNet 깊이 복원 (A100 서버 + 5557 터널 필요). 투명 TARGET 으로 '
+                '투명물체 깊이 복원 on/off (이름은 옛것 — gateway 에서는 '
+                'depth_restore_route 모델, 기본 compare). 투명 TARGET 으로 '
                 '판정됐을 때만 호출되므로 켜두어도 불투명 대상에는 비용이 없다. '
-                '서버가 없으면 analytic 원통 복원으로 폴백한다.'
+                '복원 실패 시 raw depth 로 진행한다.'
             ),
         ),
         DeclareLaunchArgument(
@@ -246,6 +271,9 @@ def generate_launch_description() -> LaunchDescription:
         parameters = [
             os.path.join(pkg, 'config', 'graspgen_params.yaml'),
             {
+                'gateway_url':         LaunchConfiguration('gateway_url'),
+                'gateway_timeout_s':   LaunchConfiguration('gateway_timeout_s'),
+                'depth_restore_route': LaunchConfiguration('depth_restore_route'),
                 'zmq_host':         LaunchConfiguration('zmq_host'),
                 'zmq_port':         LaunchConfiguration('zmq_port'),
                 'zmq_timeout_ms':   LaunchConfiguration('zmq_timeout_ms'),
