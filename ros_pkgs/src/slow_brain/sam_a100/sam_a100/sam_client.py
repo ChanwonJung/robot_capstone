@@ -1,5 +1,9 @@
 """SAM 2.1 client for the A100 segmentation server.
 
+DEPRECATED TRANSPORT: this ZMQ/msgpack protocol is the retired A100 server's.
+The current server (KHU nova-server) is reachable only through its HTTP
+gateway ($NOVA_GATEWAY_URL, x-api-key) — see launch_env_seraph.sh.
+
 ROS-free.  ZMQ REQ/REP + msgpack, matching graspgen_pkg/zmq_client.py and
 swindrnet_client.py — same transport, same recovery behaviour, different port.
 

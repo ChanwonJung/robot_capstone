@@ -1,5 +1,10 @@
 # GraspGen on A100 — Quick Start Guide
 
+> **⚠ DEPRECATED — the A100 server (`tta@123.37.28.208`) is no longer in use.**
+> Models now run on the KHU cluster's `nova-server` stack behind one HTTP gateway;
+> use `launch_env_seraph.sh` and see `ACCESS.md` in `HJ1-1101/nova-server`
+> (branch `all-in-one-depth`). Kept for reference only.
+
 **Status**: ✅ Server deployed on `tta@123.37.28.208` (2026-07-07)  
 **Server Port**: 5556 (ZMQ, loopback only)  
 **Latency**: ~184 ms round-trip (via SSH tunnel)

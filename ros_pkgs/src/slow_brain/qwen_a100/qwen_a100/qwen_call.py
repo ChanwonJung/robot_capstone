@@ -1,4 +1,4 @@
-"""Qwen VLM client for the A100 vLLM endpoint.
+"""Qwen VLM client — OpenAI-compatible endpoint behind the NOVA gateway.
 
 ROS-free.  Holds the transport, the prompt harness, and reply validation.
 No ROS types, no topic names, no node state — so it can be exercised offline
@@ -8,16 +8,24 @@ Transport is HTTP (vLLM's OpenAI-compatible API), NOT the ZMQ/msgpack channel
 that graspgen and swindrnet use.  Both live on the cluster but they are
 different services on different ports; do not unify the two clients.
 
-Endpoint reachability is via the SSH tunnel launch_env.bash opens:
-localhost:8000 -> tta@123.37.28.208:8000 (the A100, loopback-only), the same
-host that serves GraspGen on 5556 and SwinDRNet on 5557.  If the tunnel is down
-every call fails with a connection error rather than a timeout — a sub-second
-failure means the tunnel, a slow failure means the model.
+Endpoint: $NOVA_GATEWAY_URL/qwen/v1 (SGLang behind the nova-server gateway,
+served as ``qwen3.5-27b``), reached through the tunnel launch_env_seraph.sh
+opens.  The gateway wants ``x-api-key`` on every request — the OpenAI SDK only
+sends ``Authorization: Bearer``, so the key goes in as a default header, read
+from $NOVA_API_KEY.  If the tunnel is down every call fails with a connection
+error rather than a timeout — a sub-second failure means the tunnel, a slow
+failure means the model.  An HTTP 401 means the key.
+
+It is a REASONING model: thinking tokens go to reasoning_content and count
+against max_tokens.  Too small a budget returns content=None — see below.
+
+DEPRECATED: the A100 vLLM endpoint (localhost:8000, ``qwen35-local``).
 """
 from __future__ import annotations
 
 import base64
 import json
+import os
 from typing import Any
 
 import cv2
@@ -129,6 +137,22 @@ def encode_image(image_bgr: np.ndarray, quality: int = 90) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+_DEFAULT_GATEWAY_URL = "http://127.0.0.1:9000"
+DEFAULT_MODEL = "qwen3.5-27b"
+
+
+def default_endpoint() -> str:
+    """$NOVA_GATEWAY_URL/qwen/v1 (launch_env_seraph.sh exports the base URL)."""
+    base = os.environ.get("NOVA_GATEWAY_URL", "") or _DEFAULT_GATEWAY_URL
+    return base.rstrip("/") + "/qwen/v1"
+
+
+def _gateway_headers() -> dict[str, str] | None:
+    """x-api-key from the environment — never a ROS parameter, which is world-readable."""
+    key = os.environ.get("NOVA_API_KEY", "")
+    return {"x-api-key": key} if key else None
+
+
 def ground(
     image_bgr: np.ndarray,
     instruction: str,
@@ -164,7 +188,8 @@ def ground(
         raise ValueError("empty source frame")
 
     height, width = image_bgr.shape[:2]
-    client = OpenAI(base_url=endpoint_url, api_key="EMPTY", timeout=timeout_sec)
+    client = OpenAI(base_url=endpoint_url, api_key="EMPTY", timeout=timeout_sec,
+                    default_headers=_gateway_headers())
     b64 = encode_image(image_bgr)
 
     response = client.chat.completions.create(

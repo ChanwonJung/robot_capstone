@@ -31,7 +31,9 @@ is what produces the DESTINATION centroid.
 Set enable_dual_view:=false for the original single-view behaviour: one VLM
 call, one SAM instance, no destination centroid, pick-only.
 
-Requires the SSH tunnels launch_env.bash opens: 8000 (Qwen) and 5558 (SAM 2.1).
+Requires the NOVA gateway tunnel launch_env_seraph.sh opens, and NOVA_API_KEY in
+the environment. Qwen and SAM 2.1 are both reached through $NOVA_GATEWAY_URL;
+sam_gateway_url:= (empty) falls back to the DEPRECATED A100 ZMQ port sam_port.
 
 Set enable_sam:=false to run grounding alone, or enable_projector:=false to
 stop before the 3D fusion stage (useful when there is no depth stream).
@@ -44,8 +46,14 @@ from launch.actions import (DeclareLaunchArgument, GroupAction,
                             IncludeLaunchDescription, TimerAction)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import (EnvironmentVariable, LaunchConfiguration,
+                                  PythonExpression)
 from launch_ros.actions import Node
+
+
+# $NOVA_GATEWAY_URL, exported by launch_env_seraph.sh. Resolved at launch time,
+# so a non-default NOVA_GATEWAY_PORT is followed without editing this file.
+_GATEWAY = [EnvironmentVariable("NOVA_GATEWAY_URL", default_value="http://127.0.0.1:9000")]
 
 
 def _robot_defaults() -> list:
@@ -83,8 +91,10 @@ def generate_launch_description() -> LaunchDescription:
 
     args = [
         # ── Qwen ─────────────────────────────────────────────────────────────
-        DeclareLaunchArgument("vllm_endpoint_url", default_value="http://localhost:8000/v1"),
-        DeclareLaunchArgument("model_name", default_value="qwen35-local",
+        DeclareLaunchArgument(
+            "vllm_endpoint_url", default_value=_GATEWAY + ["/qwen/v1"],
+            description="NOVA gateway Qwen endpoint; x-api-key from $NOVA_API_KEY"),
+        DeclareLaunchArgument("model_name", default_value="qwen3.5-27b",
                               description="served model id (Qwen3.5-27B)"),
         DeclareLaunchArgument("image_topic", default_value="/ee_camera/image_raw"),
         DeclareLaunchArgument("top_image_topic", default_value="/camera/image_raw",
@@ -110,6 +120,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("enable_sam", default_value="true"),
         DeclareLaunchArgument("enable_projector", default_value="true"),
         # ── SAM 2.1 ──────────────────────────────────────────────────────────
+        DeclareLaunchArgument("sam_gateway_url", default_value=_GATEWAY,
+                              description="empty = DEPRECATED A100 ZMQ (sam_host/sam_port)"),
         DeclareLaunchArgument("sam_host", default_value="127.0.0.1"),
         DeclareLaunchArgument("sam_port", default_value="5558"),
         DeclareLaunchArgument(
@@ -165,6 +177,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         emulate_tty=True,
         parameters=[*_robot_defaults(), sam_params, {
+            "gateway_url": LaunchConfiguration("sam_gateway_url"),
             "zmq_host": LaunchConfiguration("sam_host"),
             "zmq_port": LaunchConfiguration("sam_port"),
             "ee_camera_info_topic": LaunchConfiguration("ee_camera_info_topic"),
@@ -193,6 +206,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         emulate_tty=True,
         parameters=[*_robot_defaults(), sam_params, {
+            "gateway_url": LaunchConfiguration("sam_gateway_url"),
             "zmq_host": LaunchConfiguration("sam_host"),
             "zmq_port": LaunchConfiguration("sam_port"),
             "camera_info_topic": LaunchConfiguration("top_camera_info_topic"),

@@ -14,14 +14,15 @@
   ros__parameters:
 
     # ── Remote endpoint ──────────────────────────────────────────────────────
-    # Reached through the SSH tunnel opened by launch_env.bash:
-    #   localhost:8000 -> tta@123.37.28.208:8000 (A100, loopback-only)
-    # Same host as GraspGen (5556) and SwinDRNet (5557).
-    vllm_endpoint_url: "http://localhost:8000/v1"
-    # Qwen3.5-27B, registered on the vLLM server under the short id below.
-    # This must match the `id` from `curl -s localhost:8000/v1/models` exactly —
-    # a mismatch 404s at inference time, not at startup.
-    model_name: "qwen35-local"
+    # NOVA gateway, via the tunnel launch_env_seraph.sh opens. The launch files
+    # override this with $NOVA_GATEWAY_URL/qwen/v1; the x-api-key header comes
+    # from $NOVA_API_KEY (never a parameter). DEPRECATED A100 value was
+    # http://localhost:8000/v1 with model qwen35-local.
+    vllm_endpoint_url: "http://127.0.0.1:9000/qwen/v1"
+    # Qwen3.5-27B as served by SGLang behind the gateway. Must match the id
+    # from GET $NOVA_GATEWAY_URL/qwen/v1/models exactly — a mismatch fails at
+    # inference time, not at startup.
+    model_name: "qwen3.5-27b"
 
     # Generous — a cold model plus a large image can take tens of seconds, and
     # a spurious timeout costs a whole scan cycle.

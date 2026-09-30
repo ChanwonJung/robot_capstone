@@ -1,5 +1,10 @@
 # 02 — A100 Service Smoke Tests
 
+> **⚠ DEPRECATED — the A100 server (`tta@123.37.28.208`) is no longer in use.**
+> Models now run on the KHU cluster's `nova-server` stack behind one HTTP gateway;
+> use `launch_env_seraph.sh` and see `ACCESS.md` in `HJ1-1101/nova-server`
+> (branch `all-in-one-depth`). Kept for reference only.
+
 **Shows:** all three remote inference services are alive and answering.
 
 **Needs:** SSH access to `tta@123.37.28.208`.

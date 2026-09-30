@@ -5,6 +5,11 @@ SwinDRNet Client — Local ROS node connector.
 Used by graspgen_node to restore transparent object depth via ZMQ.
 Connects to A100 server (via SSH tunnel on port 5557).
 
+DEPRECATED TRANSPORT: this ZMQ/msgpack protocol is the retired A100 server's.
+The current server (KHU nova-server) is reachable only through its HTTP
+gateway ($NOVA_GATEWAY_URL, x-api-key) — see launch_env_seraph.sh. Its
+/swindrnet/restore_depth takes 16-bit millimetre PNGs and no intrinsics.
+
 Usage in graspgen_node:
   client = SwinDRNetClient(host='127.0.0.1', port=5557, timeout_ms=30000)
   restored = client.restore(rgb_image, broken_depth_image)

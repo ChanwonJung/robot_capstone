@@ -12,8 +12,13 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
+
+
+# $NOVA_GATEWAY_URL, exported by launch_env_seraph.sh. Resolved at launch time,
+# so a non-default NOVA_GATEWAY_PORT is followed without editing this file.
+_GATEWAY = [EnvironmentVariable("NOVA_GATEWAY_URL", default_value="http://127.0.0.1:9000")]
 
 
 def _robot_defaults() -> list:
@@ -28,8 +33,10 @@ def generate_launch_description() -> LaunchDescription:
     params = os.path.join(pkg_share, "config", "qwen_a100_params.yaml")
 
     args = [
-        DeclareLaunchArgument("vllm_endpoint_url", default_value="http://localhost:8000/v1"),
-        DeclareLaunchArgument("model_name", default_value="qwen35-local",
+        DeclareLaunchArgument(
+            "vllm_endpoint_url", default_value=_GATEWAY + ["/qwen/v1"],
+            description="NOVA gateway Qwen endpoint; x-api-key from $NOVA_API_KEY"),
+        DeclareLaunchArgument("model_name", default_value="qwen3.5-27b",
                               description="served model id (Qwen3.5-27B)"),
         DeclareLaunchArgument("image_topic", default_value="/ee_camera/image_raw"),
         DeclareLaunchArgument("image_path", default_value="",

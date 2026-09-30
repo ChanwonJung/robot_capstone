@@ -99,7 +99,9 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Empty, String
 
-from .qwen_call import ground, VIEW_HINT_OVERHEAD, VIEW_HINT_WRIST
+from .qwen_call import (
+    DEFAULT_MODEL, default_endpoint, ground, VIEW_HINT_OVERHEAD, VIEW_HINT_WRIST,
+)
 from .qwen_schema import (
     build_labeled_detections,
     GroundingResult,
@@ -123,8 +125,9 @@ class QwenBridgeNode(Node):
     def __init__(self) -> None:
         super().__init__("qwen_bridge_node")
 
-        self.declare_parameter("vllm_endpoint_url", "http://localhost:8000/v1")
-        self.declare_parameter("model_name", "qwen35-local")
+        # NOVA gateway (launch_env_seraph.sh); key from $NOVA_API_KEY.
+        self.declare_parameter("vllm_endpoint_url", default_endpoint())
+        self.declare_parameter("model_name", DEFAULT_MODEL)
         self.declare_parameter("image_topic", "/ee_camera/image_raw")
         # Empty disables the dual-view path entirely and this node behaves
         # exactly as before. Set it to the overhead RGB topic to enable.

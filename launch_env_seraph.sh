@@ -36,23 +36,64 @@ export ROBOT_CAPSTONE_ROOT="${WS}"
 echo "[launch_env] ROS2 Jazzy + venv PYTHONPATH set"
 echo "  venv : ${VENV_SITE}"
 
-# ── SSH tunnels ───────────────────────────────────────────────────────────────
-# Active target: aurora-g6 (KHU cluster), via the campus jump host.
-# 1. Qwen (SGLang)        → localhost:8000
-# 2. Perception gateway   → localhost:9000  (unifies SAM2 + GraspGen + SwinDRNet
-#                            behind one HTTP port — see services/gateway.sh on
-#                            the cluster side. Direct per-service ports 8001
-#                            [SAM2], 8002 [SwinDRNet], 5556 [GraspGen ZMQ] are
-#                            only reachable if those are run standalone instead
-#                            of through all_in_one.sh.)
+
+# ── NOVA gateway tunnel ───────────────────────────────────────────────────────
+# Target: the nova-server stack (Slurm job "NOVA_depth3", 4 GPUs) on the KHU
+# cluster, reached through its HTTP gateway. Start it on aurora-master with
+#   NOVA_GATEWAY=1 NOVA_GATEWAY_HOST=0.0.0.0 NOVA_GATEWAY_KEY='<key>' \
+#       sbatch services/all_in_one_depth.sh
+# See ACCESS.md in /data/jaewonheo1101/nova-server (HJ1-1101/nova-server,
+# branch all-in-one-depth).
+#
+# ONE tunnel, not one per model. Every model server binds 127.0.0.1 on the
+# compute node and there is no SSH onto compute nodes, so the per-model ports
+# (qwen 10000, sam2 20000, swindrnet 30000, remake 31000, tdr CA-Dual 32000,
+# graspgen 40000) are unreachable from here. The gateway on :9000 proxies all
+# of them; the forward terminates on aurora-master, which reaches the node:
+#
+#   127.0.0.1:9000 ──ssh -L──▶ aurora-master:30080 ──▶ ${NOVA_NODE}:9000
+#
+#   GET  /health                     200 even with a backend down — read the body
+#   POST /qwen/v1/chat/completions   OpenAI-compatible, model "qwen3.5-27b"
+#   POST /sam2/segment               multipart: image + box / points
+#   POST /{swindrnet,remake,compare}/restore_depth   multipart, 16-bit mm PNGs
+#   POST /graspgen/infer             JSON {"point_cloud": [[x,y,z],...], ...}
+#
+# Every request needs the header  x-api-key: $NOVA_API_KEY
+#
+# Overrides (set before sourcing):
+#   NOVA_NODE          compute node the job landed on (default aurora-g6).
+#                      It changes between jobs — check `squeue -u jaewonheo1101`.
+#   NOVA_GATEWAY_PORT  local port for the forward (default 9000)
+#   NOVA_API_KEY       gateway key; otherwise read from ${WS}/.env (gitignored).
+#                      Never commit it.
+#
+# Campus network or VPN only. Off-network, skip the tunnel or it hangs:
+#   source launch_env_seraph.sh --no-tunnel   (or SKIP_A100_TUNNEL=1)
 
 _SKIP_TUNNEL="${SKIP_A100_TUNNEL:-0}"
 for _arg in "$@"; do
     [ "${_arg}" = "--no-tunnel" ] && _SKIP_TUNNEL=1
 done
 
-_KHU_JUMP="allen516@aurora.khu.ac.kr:30080"
-_AURORA_HOST="allen516@aurora-g6"
+_NOVA_LOGIN="jaewonheo1101@163.180.160.105"   # aurora-master
+_NOVA_SSH_PORT=30080
+NOVA_NODE="${NOVA_NODE:-aurora-g6}"
+NOVA_GATEWAY_PORT="${NOVA_GATEWAY_PORT:-9000}"
+export NOVA_GATEWAY_URL="http://127.0.0.1:${NOVA_GATEWAY_PORT}"
+
+# The key comes from the environment first, then from .env. Only the one line is
+# read — sourcing .env wholesale would run whatever else is in it.
+if [ -z "${NOVA_API_KEY:-}" ] && [ -f "${WS}/.env" ]; then
+    NOVA_API_KEY="$(sed -n 's/^[[:space:]]*\(export[[:space:]]\+\)\?NOVA_API_KEY=//p' "${WS}/.env" \
+        | tail -n 1 | sed -e "s/^[\"']//" -e "s/[\"']\$//")"
+fi
+if [ -n "${NOVA_API_KEY:-}" ]; then
+    export NOVA_API_KEY
+else
+    echo "[launch_env] ⚠ NOVA_API_KEY is not set — every gateway request will"
+    echo "[launch_env]   return 401. export NOVA_API_KEY=... or add it to ${WS}/.env"
+fi
 
 # Is a LISTENER bound to this port?
 #
@@ -68,9 +109,7 @@ _port_listening() {
 #
 # `ssh -f` backgrounds itself, so a zero exit does not prove the forward came
 # up — a refused bind still detaches cleanly. Poll for the listener instead of
-# trusting the exit code. Takes the destination-side ssh args (the `-L ...`
-# spec plus whatever host/jump gets you there) as trailing arguments, so the
-# same honest-reporting logic works for a direct host or a jump-host chain.
+# trusting the exit code.
 _open_tunnel() {
     local port="$1" label="$2"; shift 2
     local rc i
@@ -81,7 +120,8 @@ _open_tunnel() {
 
     # ConnectTimeout bounds the off-network case, which otherwise hangs the
     # whole shell on a dead route. Use --no-tunnel to skip these entirely.
-    ssh -fN -o ConnectTimeout=10 "$@"
+    # ServerAliveInterval drops a dead forward instead of leaving it half-open.
+    ssh -fN -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes "$@"
     rc=$?
     if [ ${rc} -ne 0 ]; then
         echo "[launch_env] ✗ ${label} tunnel FAILED — ssh exited ${rc} (port ${port})"
@@ -101,23 +141,53 @@ _open_tunnel() {
     return 1
 }
 
+# Per-backend status from /health. The route answers 200 even when a backend is
+# down, so the status code proves nothing — only the body does. A tunnel that
+# comes up cleanly while the Slurm job is dead (or on another node) is the
+# common failure, and it looks exactly like success without this.
+_gateway_health() {
+    local body
+    [ -n "${NOVA_API_KEY:-}" ] || return 0
+    body="$(curl -s --max-time 8 -H "x-api-key: ${NOVA_API_KEY}" \
+        "${NOVA_GATEWAY_URL}/health")" || {
+        echo "[launch_env] ✗ gateway not answering at ${NOVA_GATEWAY_URL} — is job"
+        echo "[launch_env]   NOVA_depth3 running on ${NOVA_NODE}? (squeue -u jaewonheo1101)"
+        return 1
+    }
+    printf '%s' "${body}" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    health = json.loads(raw)
+except ValueError:
+    print(f"[launch_env] ✗ gateway replied with non-JSON: {raw[:120]!r}")
+    sys.exit(1)
+if "detail" in health:            # FastAPI error body, e.g. a 401
+    detail = health["detail"]
+    print(f"[launch_env] ✗ gateway: {detail}")
+    sys.exit(1)
+for name, st in health.items():
+    status = st.get("status", "?") if isinstance(st, dict) else st
+    mark = "✓" if status == "ok" else "✗"
+    print(f"[launch_env]   {mark} {name:10s} {status}")
+'
+}
+
 if [ "${_SKIP_TUNNEL}" = "1" ]; then
-    echo "[launch_env] aurora-g6 SSH tunnels skipped (--no-tunnel / SKIP_A100_TUNNEL=1)"
+    echo "[launch_env] NOVA gateway tunnel skipped (--no-tunnel / SKIP_A100_TUNNEL=1)"
 else
-    _TUNNEL_FAILS=0
-    _open_tunnel 8000 "Qwen (SGLang)"        -L 8000:127.0.0.1:8000 -J "${_KHU_JUMP}" "${_AURORA_HOST}" || _TUNNEL_FAILS=$((_TUNNEL_FAILS + 1))
-    _open_tunnel 9000 "Perception gateway"   -L 9000:127.0.0.1:9000 -J "${_KHU_JUMP}" "${_AURORA_HOST}" || _TUNNEL_FAILS=$((_TUNNEL_FAILS + 1))
-
-    if [ "${_TUNNEL_FAILS}" -ne 0 ]; then
-        echo "[launch_env] ⚠ ${_TUNNEL_FAILS} tunnel(s) unavailable — the"
-        echo "[launch_env]   corresponding services will fail with a connection"
-        echo "[launch_env]   error in under a second."
+    if _open_tunnel "${NOVA_GATEWAY_PORT}" "NOVA gateway (${NOVA_NODE})" \
+            -p "${_NOVA_SSH_PORT}" \
+            -L "${NOVA_GATEWAY_PORT}:${NOVA_NODE}:9000" "${_NOVA_LOGIN}"; then
+        _gateway_health
+    else
+        echo "[launch_env] ⚠ gateway unavailable — every remote model call will fail."
     fi
-    unset _TUNNEL_FAILS
 
-    # ── OLD: all four services on the A100 (tta@123.37.28.208) ───────────────
-    # Kept in case the model(s) move back there. Direct single-hop, no jump
-    # host needed. Swap the two lines above for this block:
+    # ── DEPRECATED: all four services on the A100 (tta@123.37.28.208) ────────
+    # The A100 is no longer in use. Kept for reference only: direct single-hop,
+    # one ZMQ/HTTP port per model — what launch_env.bash (also deprecated)
+    # opens, and what the launch-file port defaults still point at.
     #
     # _A100_HOST="tta@123.37.28.208"
     # _open_tunnel 8000 "Qwen vLLM"  -L 8000:127.0.0.1:8000 "${_A100_HOST}"
@@ -127,5 +197,6 @@ else
     # ─────────────────────────────────────────────────────────────────────────
 fi
 # This file is SOURCED, so the helpers would otherwise linger in the caller's
-# shell. The functions go; _KHU_JUMP/_AURORA_HOST are kept — handy for manual ssh.
-unset -f _open_tunnel _port_listening
+# shell. NOVA_GATEWAY_URL / NOVA_API_KEY / NOVA_NODE stay exported for clients.
+unset -f _open_tunnel _port_listening _gateway_health
+unset _SKIP_TUNNEL _arg _NOVA_LOGIN _NOVA_SSH_PORT

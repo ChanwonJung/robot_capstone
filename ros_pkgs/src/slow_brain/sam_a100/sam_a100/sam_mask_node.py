@@ -1,7 +1,8 @@
 """ROS 2 node: Qwen boxes + source frame -> mono8 label map for the projector.
 
-Wiring only.  Transport lives in sam_client.py, the label-map contract in
-label_map.py.
+Wiring only.  Transport lives in sam_http_client.py (NOVA gateway, current) or
+sam_client.py (ZMQ, DEPRECATED A100 — used only when gateway_url is empty),
+the label-map contract in label_map.py.
 
 Subscribes
   /qwen/source_image           sensor_msgs/Image   **TRIGGER**
@@ -52,6 +53,7 @@ from std_msgs.msg import String
 
 from .label_map import compose_label_map, mask_stats
 from .sam_client import SamClient
+from .sam_http_client import default_gateway_url, SamHttpClient
 
 LATCHED = QoSProfile(
     depth=1,
@@ -67,6 +69,10 @@ class SamMaskNode(Node):
     def __init__(self) -> None:
         super().__init__("sam_mask_node")
 
+        # NOVA HTTP gateway (launch_env_seraph.sh). Non-empty = use it; the key
+        # comes from $NOVA_API_KEY, never a parameter. Empty = DEPRECATED ZMQ.
+        self.declare_parameter("gateway_url", default_gateway_url())
+        self.declare_parameter("gateway_timeout_s", 30.0)
         self.declare_parameter("zmq_host", "127.0.0.1")
         self.declare_parameter("zmq_port", 5558)
         self.declare_parameter("zmq_timeout_ms", 30000)
@@ -140,11 +146,25 @@ class SamMaskNode(Node):
         self._detections: list[dict] | None = None
         self._depth_hw: tuple[int, int] | None = None
 
-        self._client = SamClient(
-            host=self.get_parameter("zmq_host").value,
-            port=int(self.get_parameter("zmq_port").value),
-            timeout_ms=self._timeout_ms,
-        )
+        gateway = str(self.get_parameter("gateway_url").value).strip()
+        if gateway:
+            self._client = SamHttpClient(
+                gateway,
+                timeout_s=float(self.get_parameter("gateway_timeout_s").value))
+            server = f"{gateway}/sam2/segment"
+            if not os.environ.get("NOVA_API_KEY"):
+                self.get_logger().warn(
+                    "NOVA_API_KEY is not set — every gateway request will get HTTP "
+                    "401. Export it (or add it to .env) and re-source "
+                    "launch_env_seraph.sh before launching.")
+        else:
+            self._client = SamClient(
+                host=self.get_parameter("zmq_host").value,
+                port=int(self.get_parameter("zmq_port").value),
+                timeout_ms=self._timeout_ms,
+            )
+            server = (f"tcp://{self.get_parameter('zmq_host').value}:"
+                      f"{self.get_parameter('zmq_port').value} (DEPRECATED A100 ZMQ)")
 
         self.create_subscription(
             String, self.get_parameter("detections_topic").value,
@@ -170,9 +190,7 @@ class SamMaskNode(Node):
             self.get_logger().info(f"mask size pinned to {w}x{h} by parameter")
 
         self.get_logger().info(
-            f"sam_mask_node ready — server "
-            f"{self.get_parameter('zmq_host').value}:"
-            f"{self.get_parameter('zmq_port').value}; "
+            f"sam_mask_node ready — server {server}; "
             f"trigger={self.get_parameter('source_image_topic').value} "
             f"size_from={info_topic} "
             f"mask={self.get_parameter('mask_topic').value}")
