@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!--
+gen3_isaac.xacro — 관절 이름/구조 확인 + Isaac Sim USD 임포트용 URDF 생성 진입점.
+
+kortex_description 0.2.6(apt, Jazzy)의 robots/gen3_robotiq_2f_85.xacro와
+kortex_robot.xacro의 load_robot -> load_gripper 체인은 설치된 robotiq_description
+버전과 파라미터 시그니처가 어긋나 있다(mock_sensor_commands/isaac_joint_commands 등
+kortex 쪽 wrapper가 넘기는 인자를 robotiq_description의 robotiq_gripper 매크로가
+받지 않음 — 두 apt 패키지 간 버전 스큐). load_arm(팔 부분)은 정상 동작하므로 그건
+그대로 재사용하고, 그리퍼만 kortex의 깨진 중간 wrapper(grippers/robotiq_2f_85/...)를
+건너뛰어 robotiq_description의 robotiq_2f_85_macro.urdf.xacro를 직접 호출한다.
+시스템 apt 파일은 건드리지 않는다(다음 apt 업데이트에 덮어써지는 걸 피하기 위해).
+-->
+<robot name="gen3_robotiq_2f_85" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <link name="world"/>
+
+  <xacro:include filename="$(find kortex_description)/arms/gen3/7dof/urdf/gen3_macro.xacro" />
+  <xacro:load_arm
+    parent="world"
+    dof="7"
+    vision="true"
+    prefix=""
+    robot_ip="192.168.1.10"
+    gripper="robotiq_2f_85"
+    gripper_joint_name="robotiq_85_left_knuckle_joint"
+    use_fake_hardware="false"
+    fake_sensor_commands="false"
+    sim_gazebo="false"
+    sim_isaac="true"
+    moveit_active="true">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </xacro:load_arm>
+
+  <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro" />
+  <xacro:robotiq_gripper
+    name="RobotiqGripperHardwareInterface"
+    prefix=""
+    parent="end_effector_link"
+    sim_isaac="true"
+    use_fake_hardware="false"
+    fake_sensor_commands="false"
+    include_ros2_control="true">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </xacro:robotiq_gripper>
+
+</robot>

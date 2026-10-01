@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║ DEPRECATED — the A100 server (tta@123.37.28.208) is no longer in use.    ║
+# ║ Use launch_env_seraph.sh (KHU nova-server stack via its HTTP gateway).   ║
+# ║ Kept only for reference / in case the A100 comes back.                   ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
 # ROS2 + venv 통합 환경 설정
 # 사용법: source launch_env.bash
 #
@@ -36,7 +42,13 @@ export ROBOT_CAPSTONE_ROOT="${WS}"
 echo "[launch_env] ROS2 Jazzy + venv PYTHONPATH set"
 echo "  venv : ${VENV_SITE}"
 
-# ── SSH tunnels ───────────────────────────────────────────────────────────────
+# Said on every source, not just in the header: the A100 is gone, so these
+# tunnels either hang until ConnectTimeout or fail — easy to mistake for a
+# network problem rather than the wrong script.
+echo "[launch_env] ⚠ DEPRECATED: launch_env.bash targets the retired A100 server."
+echo "[launch_env]   Use:  source launch_env_seraph.sh"
+
+# ── SSH tunnels (DEPRECATED — A100 retired) ───────────────────────────────────
 # All three now terminate on the A100 (tta@123.37.28.208), loopback-only.
 # 1. Qwen vLLM  (A100) → localhost:8000
 # 2. GraspGen ZMQ (A100) → localhost:5556

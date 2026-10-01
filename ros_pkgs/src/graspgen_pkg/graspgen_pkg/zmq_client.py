@@ -1,6 +1,10 @@
 """
 zmq_client.py — ZMQ REQ-REP client wrapper for GraspGen inference server.
 
+DEPRECATED TRANSPORT: this ZMQ/msgpack protocol is the retired A100 server's.
+The current server (KHU nova-server) is reachable only through its HTTP
+gateway ($NOVA_GATEWAY_URL, x-api-key) — see launch_env_seraph.sh.
+
 Server protocol (aurora-g5, graspgen_franka_panda.yml):
   - Transport : ZMQ REQ/REP over TCP
   - Request   : msgpack-encoded dict
@@ -61,8 +65,8 @@ class GraspGenClient:
     def __init__(self, host: str, port: int, timeout_ms: int = 5000) -> None:
         if not _DEPS_OK:
             raise ImportError(
-                f'graspgen_pkg requires pyzmq and msgpack: {_DEPS_ERROR}\n'
-                'Run: pip install pyzmq msgpack'
+                f'graspgen_pkg requires pyzmq, msgpack and msgpack-numpy: {_DEPS_ERROR}\n'
+                'Run: gsam_venv/bin/pip install -r ros_pkgs/src/graspgen_pkg/requirements.txt'
             )
         self._addr       = f'tcp://{host}:{port}'
         self._timeout_ms = timeout_ms

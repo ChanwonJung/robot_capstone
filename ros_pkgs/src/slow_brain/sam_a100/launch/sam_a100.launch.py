@@ -2,16 +2,18 @@
 
     ros2 launch sam_a100 sam_a100.launch.py
 
-Needs the port-5558 tunnel and an upstream publishing /qwen/source_image plus
-/qwen/labeled_detections — normally qwen_a100. For the two together, use
-qwen_a100's slow_brain.launch.py with enable_sam:=true.
+Needs the NOVA gateway tunnel (source launch_env_seraph.sh; NOVA_API_KEY set)
+— or, with gateway_url:= empty, the DEPRECATED A100 port-5558 tunnel — and an
+upstream publishing /qwen/source_image plus /qwen/labeled_detections — normally
+qwen_a100. For the two together, use qwen_a100's slow_brain.launch.py with
+enable_sam:=true.
 """
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -26,6 +28,11 @@ def generate_launch_description() -> LaunchDescription:
         get_package_share_directory("sam_a100"), "config", "sam_a100_params.yaml")
 
     args = [
+        DeclareLaunchArgument(
+            "gateway_url",
+            default_value=EnvironmentVariable("NOVA_GATEWAY_URL",
+                                              default_value="http://127.0.0.1:9000"),
+            description="NOVA gateway; empty = DEPRECATED A100 ZMQ (zmq_host/zmq_port)"),
         DeclareLaunchArgument("zmq_host", default_value="127.0.0.1"),
         DeclareLaunchArgument("zmq_port", default_value="5558"),
         DeclareLaunchArgument("ee_camera_info_topic",
@@ -43,6 +50,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         emulate_tty=True,
         parameters=[*_robot_defaults(), params, {
+            "gateway_url": LaunchConfiguration("gateway_url"),
             "zmq_host": LaunchConfiguration("zmq_host"),
             "zmq_port": LaunchConfiguration("zmq_port"),
             "ee_camera_info_topic": LaunchConfiguration("ee_camera_info_topic"),

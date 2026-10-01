@@ -10,7 +10,13 @@
 #
 # rclpy / cv_bridge / sensor_msgs come from apt via package.xml — not listed here.
 
+# HTTP transport to the NOVA gateway — the CURRENT server. sam_http_client.py
+# posts multipart to /sam2/segment; Qwen goes through the openai client below.
+requests
+
 # ZMQ + msgpack transport to the A100 (SAM 5558; same stack as graspgen 5556).
+# The A100 is DEPRECATED; the current server is an HTTP gateway (see
+# launch_env_seraph.sh). Kept because the clients still import these.
 # msgpack-numpy is what lets raw ndarrays cross the wire; without its .patch()
 # the image and mask arrays serialise as opaque blobs the server cannot decode.
 pyzmq
